@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from server_tg_home.core.config import Settings
+from server_tg_home.core.runtime_state import runtime_state_text
 from server_tg_home.database.models import Job, Video
 from server_tg_home.jobs.queue import JobQueue
 from server_tg_home.media.storage import folder_size_bytes, format_bytes, iter_video_files
@@ -44,7 +45,7 @@ def build_status_text(settings: Settings, session: Session, queue: JobQueue) -> 
             f"{latest_video.camera_id}, {_format_age(latest_video.created_at)}, "
             f"{format_bytes(latest_video.size_bytes)}"
         )
-    lines.extend(["", build_cameras_text(settings)])
+    lines.extend(["", runtime_state_text(session), "", build_cameras_text(settings)])
     if failed_jobs:
         lines.append("")
         lines.append("Recent failed jobs:")

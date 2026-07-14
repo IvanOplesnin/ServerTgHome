@@ -12,8 +12,7 @@ def upgrade_database(database_url: str) -> None:
     os.environ["STH_DATABASE_URL"] = database_url
     config = Config(str(_find_alembic_ini()))
     if _should_stamp_existing_initial_schema(database_url):
-        command.stamp(config, "head")
-        return
+        command.stamp(config, "0001_initial")
     command.upgrade(config, "head")
 
 

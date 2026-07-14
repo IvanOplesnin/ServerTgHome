@@ -3,6 +3,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from server_tg_home.core.config import EventConfig, Settings
+from server_tg_home.core.runtime_state import notifications_enabled
 from server_tg_home.jobs.queue import JobQueue
 from server_tg_home.jobs.repository import create_job, iso_utc_now
 
@@ -67,7 +68,10 @@ def create_event_job(
     event_id: str,
     event: EventConfig,
     event_payload: dict | None,
-) -> str:
+) -> str | None:
+    enabled, _ = notifications_enabled(session)
+    if not enabled:
+        return None
     return create_record_video_job(
         settings,
         session,

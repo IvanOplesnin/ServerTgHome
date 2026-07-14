@@ -111,6 +111,8 @@ def create_app() -> FastAPI:
                 )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if job_id is None:
+            return {"job_id": "", "status": "ignored"}
         return {"job_id": job_id, "status": "queued"}
 
     @app.post("/jobs/record-video")

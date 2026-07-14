@@ -190,8 +190,13 @@ rest_command:
 The bot registers the Telegram command menu automatically, so typing `/` shows the available commands in the client.
 
 - `/start`: shows the current `chat_id`.
+- `/cameras`: shows camera and buffer status.
 - `/clip entrance 20`: records and sends a 20 second clip.
+- `/last entrance`: sends the latest saved video for a camera.
 - `/snapshot entrance`: captures and sends one camera frame.
+- `/arm`: enables automatic event notifications.
+- `/disarm`: disables automatic event notifications.
+- `/mute 1h`: temporarily disables automatic event notifications, `/mute off` clears the mute.
 - `/ac_on climate.bedroom`: calls `climate.turn_on` in Home Assistant.
 - `/status`: shows Redis, queue, database and storage status.
 
