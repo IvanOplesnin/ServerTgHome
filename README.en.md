@@ -143,6 +143,9 @@ With the default config this means:
 /data/buffer/yard/
 ```
 
+`ffmpeg_output_args` is used for the continuous buffer. In most cases keep `-c:v copy` there so the camera stream is not transcoded constantly.
+`ffmpeg_clip_output_args` is used only for the final Telegram clip; by default it transcodes to H.264/AAC so Telegram handles duration and audio reliably.
+
 Usually you scale `worker` when the number of heavy jobs grows. Keep `buffer` as a single instance unless cameras are split across different physical servers or network/CPU load becomes too high.
 
 ## Local Development

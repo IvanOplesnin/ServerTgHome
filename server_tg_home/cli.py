@@ -47,10 +47,10 @@ def main() -> None:
 
     settings = load_settings()
     configure_logging(settings.app.log_level)
-    init_db(settings.app.database_url)
     ensure_storage(settings)
 
     if args.command == "worker":
+        init_db(settings.app.database_url)
         os.execvp(
             "dramatiq",
             [
@@ -65,6 +65,8 @@ def main() -> None:
     elif args.command == "buffer":
         BufferWorker(settings).run_forever()
     elif args.command == "retention":
+        init_db(settings.app.database_url)
         RetentionWorker(settings).run_forever(once=args.once)
     elif args.command == "init-db":
+        init_db(settings.app.database_url)
         return

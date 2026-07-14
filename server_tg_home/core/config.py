@@ -73,7 +73,7 @@ class BufferConfig(BaseModel):
     path: Path = Path("./data/buffer")
     pre_event_seconds: int = 4
     segment_seconds: int = 1
-    keep_seconds: int = 12
+    keep_seconds: int = 60
     restart_delay_sec: int = 5
 
 
@@ -82,7 +82,42 @@ class CameraConfig(BaseModel):
     buffer_enabled: bool = True
     default_duration_sec: int = 20
     ffmpeg_input_args: list[str] = Field(default_factory=lambda: ["-rtsp_transport", "tcp"])
-    ffmpeg_output_args: list[str] = Field(default_factory=lambda: ["-an", "-c:v", "copy"])
+    ffmpeg_output_args: list[str] = Field(
+        default_factory=lambda: [
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a?",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+        ]
+    )
+    ffmpeg_clip_output_args: list[str] = Field(
+        default_factory=lambda: [
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a?",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "23",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-movflags",
+            "+faststart",
+        ]
+    )
 
 
 class EventConfig(BaseModel):
