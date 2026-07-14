@@ -1,0 +1,60 @@
+app:
+  database_url: "postgresql+psycopg://${POSTGRES_USER:-server_tg_home}:${POSTGRES_PASSWORD:-server_tg_home_password}@postgres:5432/${POSTGRES_DB:-server_tg_home}"
+  redis_url: "redis://redis:6379/0"
+  queue_name: "server_tg_home_jobs"
+  log_level: "INFO"
+  webhook_token: "${STH_WEBHOOK_TOKEN:-}"
+
+api:
+  enable_telegram_polling: true
+
+telegram:
+  bot_token: "${TELEGRAM_BOT_TOKEN:-}"
+  proxy_url: "${TELEGRAM_PROXY_URL:-}"
+  allowed_chat_ids: []
+  default_chat_ids: []
+  request_timeout_sec: 180
+
+home_assistant:
+  base_url: "http://homeassistant.local:8123"
+  token: "${HOME_ASSISTANT_TOKEN:-}"
+  request_timeout_sec: 20
+
+storage:
+  path: "/data/clips"
+  max_size_mb: 10240
+  warning_threshold_percent: 85
+  cleanup_target_percent: 75
+  delete_batch_size: 10
+  warning_cooldown_sec: 3600
+  retention_poll_sec: 300
+  notify_chat_ids: []
+
+buffer:
+  enabled: true
+  path: "/data/buffer"
+  pre_event_seconds: 4
+  segment_seconds: 1
+  keep_seconds: 12
+  restart_delay_sec: 5
+
+cameras:
+  entrance:
+    rtsp_url: "rtsp://user:password@192.168.1.10:554/stream1"
+    buffer_enabled: true
+    default_duration_sec: 20
+    ffmpeg_input_args:
+      - "-rtsp_transport"
+      - "tcp"
+    ffmpeg_output_args:
+      - "-an"
+      - "-c:v"
+      - "copy"
+
+events:
+  door_open:
+    camera_id: "entrance"
+    duration_sec: 20
+    pre_event_sec: 4
+    chat_ids: []
+    message: "Door opened"

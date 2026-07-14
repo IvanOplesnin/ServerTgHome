@@ -1,0 +1,32 @@
+[project]
+name = "server-tg-home"
+version = "0.1.0"
+description = "Local Home Assistant to Telegram video/event service"
+requires-python = ">=3.12"
+dependencies = [
+    "aiogram>=3.22,<4",
+    "aiohttp-socks>=0.9,<1",
+    "alembic>=1.15,<2",
+    "apscheduler>=3.10,<4",
+    "dramatiq[redis]>=2.0,<3",
+    "fastapi>=0.115,<1",
+    "httpx>=0.27,<1",
+    "psycopg[binary]>=3.2,<4",
+    "pydantic>=2.8,<3",
+    "pydantic-settings>=2.7,<3",
+    "python-dotenv>=1.0,<2",
+    "pyyaml>=6.0,<7",
+    "redis>=5,<7",
+    "sqlalchemy>=2.0,<3",
+    "uvicorn[standard]>=0.30,<1",
+]
+
+[project.scripts]
+server-tg-home = "server_tg_home.cli:main"
+
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["server_tg_home*"]
