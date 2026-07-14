@@ -1,51 +1,53 @@
 # Server Tg Home
 
-Local service for Home Assistant events, RTSP camera clips and Telegram delivery.
+Основная документация на русском языке. Английская версия: [README.en.md](README.en.md).
 
-## Architecture
+Локальный сервис для событий Home Assistant, записи RTSP-видео и отправки сообщений, фото и видео в Telegram.
 
-- `api`: FastAPI webhooks for Home Assistant plus aiogram Telegram long polling.
-- `worker`: Dramatiq worker; receives `job_id`, loads job details from DB and performs work.
-- `buffer`: keeps a short rolling RTSP segment buffer per camera.
-- `retention`: APScheduler process that monitors clip folder size, warns via Telegram and deletes old clips when needed.
-- `redis`: Dramatiq broker.
-- `postgres`: persistent job, status and video history database.
-- `alembic`: database schema migrations.
+## Архитектура
 
-The queue stores only `job_id`. Job payload, status and history live in the database.
+- `api`: FastAPI HTTP API для webhook-запросов Home Assistant и aiogram long polling для Telegram-бота.
+- `worker`: Dramatiq worker; получает `job_id`, читает детали задачи из БД и выполняет работу.
+- `buffer`: поддерживает короткий постоянный RTSP-буфер по каждой камере.
+- `retention`: APScheduler-процесс, который следит за размером папки с видео, предупреждает через Telegram и удаляет старые ролики при переполнении.
+- `redis`: брокер очереди Dramatiq.
+- `postgres`: постоянное хранилище задач, статусов и истории видео.
+- `alembic`: миграции схемы базы данных.
 
-## Project Structure
+Очередь хранит только `job_id`. Payload задачи, статус, попытки выполнения и история хранятся в Postgres.
+
+## Структура проекта
 
 ```text
 server_tg_home/
-  api/            FastAPI app, HTTP request models and routes.
-  core/           Settings, logging and cross-cutting status rendering.
-  database/       SQLAlchemy session, ORM models and Alembic migration runner.
-  integrations/  External systems except Telegram: Home Assistant, future APIs.
-  jobs/          Job creation, DB status transitions, Dramatiq queue and actors.
-  media/         ffmpeg recording, RTSP buffer segment handling and file storage.
-  telegram/      aiogram bot polling and Telegram send client.
-  workers/       Long-running non-HTTP processes: camera buffer and retention.
-  cli.py         Process entrypoint used by Docker and local commands.
+  api/            FastAPI-приложение, HTTP-модели и маршруты.
+  core/           Настройки, логирование и общий текст статуса.
+  database/       SQLAlchemy-сессия, ORM-модели и запуск Alembic.
+  integrations/  Внешние системы кроме Telegram: Home Assistant и будущие API.
+  jobs/           Создание задач, статусы в БД, очередь Dramatiq и акторы.
+  media/          ffmpeg-запись, RTSP-буфер и работа с файлами.
+  telegram/       aiogram polling и клиент отправки сообщений в Telegram.
+  workers/        Долгоживущие процессы: буфер камер и очистка хранилища.
+  cli.py          Точка входа для Docker и локальных команд.
 ```
 
-When adding features, keep the direction simple:
+Правила добавления новой логики:
 
-- HTTP endpoints belong in `api/`.
-- Telegram commands belong in `telegram/polling.py`.
-- New job types belong in `jobs/factory.py` and `jobs/processor.py`.
-- Direct calls to external systems belong in `integrations/`.
-- Video/file logic belongs in `media/`.
-- Long-running loops and schedulers belong in `workers/`.
+- HTTP-обработчики добавляются в `api/`.
+- Telegram-команды добавляются в `telegram/polling.py`.
+- Новые типы задач добавляются в `jobs/factory.py` и `jobs/processor.py`.
+- Прямые вызовы внешних сервисов добавляются в `integrations/`.
+- Логика видео, буфера и файлов добавляется в `media/`.
+- Долгоживущие циклы и планировщики добавляются в `workers/`.
 
-## First Run
+## Первый запуск
 
 ```bash
 cp config/config.example.yaml config/config.yaml
 mkdir -p data
 ```
 
-Set secrets in `.env`:
+Задайте секреты в `.env`:
 
 ```dotenv
 TELEGRAM_BOT_TOKEN=123456:token
@@ -57,16 +59,16 @@ POSTGRES_USER=server_tg_home
 POSTGRES_PASSWORD=change-this-password
 ```
 
-Fill `telegram.allowed_chat_ids` and `telegram.default_chat_ids` in `config/config.yaml`.
-Send `/start` to the bot to see your `chat_id`.
+Заполните `telegram.allowed_chat_ids` и `telegram.default_chat_ids` в `config/config.yaml`.
+Чтобы узнать `chat_id`, отправьте боту команду `/start`.
 
-Start:
+Запуск:
 
 ```bash
 docker compose up --build
 ```
 
-## Home Assistant Webhook Example
+## Пример webhook из Home Assistant
 
 ```yaml
 automation:
@@ -88,17 +90,17 @@ rest_command:
     payload: '{"entity_id":"binary_sensor.door"}'
 ```
 
-## Telegram Commands
+## Команды Telegram
 
-- `/start` shows the current chat id.
-- `/clip entrance 20` records and sends a 20 second clip.
-- `/snapshot entrance` captures and sends one frame.
-- `/ac_on climate.bedroom` calls `climate.turn_on` in Home Assistant.
-- `/status` shows queue, DB and storage status.
+- `/start`: показывает текущий `chat_id`.
+- `/clip entrance 20`: записывает и отправляет 20-секундный клип.
+- `/snapshot entrance`: делает и отправляет один кадр с камеры.
+- `/ac_on climate.bedroom`: вызывает `climate.turn_on` в Home Assistant.
+- `/status`: показывает статус Redis, очереди, БД и хранилища.
 
-## Multiple Cameras
+## Несколько камер
 
-Add cameras under `cameras` and point events or Telegram commands to their ids:
+Добавьте камеры в секцию `cameras`, а события и команды Telegram должны ссылаться на их `id`:
 
 ```yaml
 cameras:
@@ -126,23 +128,24 @@ events:
     message: "Yard motion"
 ```
 
-You do not need one buffer worker container per camera. One `buffer` process starts one ffmpeg process per camera with `buffer_enabled: true`.
-Temporary buffer segments are stored under:
+Отдельный контейнер `buffer` на каждую камеру не нужен. Один процесс `buffer` запускает по одному `ffmpeg` процессу на каждую камеру с `buffer_enabled: true`.
+
+Временные сегменты буфера хранятся в:
 
 ```text
 <buffer.path>/<camera_id>/
 ```
 
-With the default config this means:
+При стандартном конфиге это:
 
 ```text
 /data/buffer/entrance/
 /data/buffer/yard/
 ```
 
-Start more `worker` replicas only for job execution throughput, not for the camera buffer. Keep a single `buffer` service unless you intentionally split cameras across different machines.
+Масштабировать обычно нужно `worker`, если растет количество тяжелых задач. `buffer` лучше держать в одном экземпляре, если только камеры не разделены по разным физическим серверам или нагрузка на сеть/CPU не стала слишком высокой.
 
-## Local Development
+## Локальная разработка
 
 ```bash
 python -m venv .venv
@@ -152,5 +155,4 @@ cp config/config.example.yaml config/config.yaml
 server-tg-home api --host 0.0.0.0 --port 8080
 ```
 
-For local development outside Docker, point `app.database_url` in `config/config.yaml`
-to a reachable Postgres instance.
+Для запуска вне Docker укажите в `app.database_url` внутри `config/config.yaml` доступный Postgres.
