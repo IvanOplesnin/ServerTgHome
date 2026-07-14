@@ -103,16 +103,28 @@ class JobProcessor:
         session.commit()
 
         caption = payload.get("message") or f"Camera {camera_id}"
+        message_thread_id = _message_thread_id(payload)
         for chat_id in _chat_ids(payload):
-            self._require_telegram().send_video(chat_id, path, caption=caption)
+            self._require_telegram().send_video(
+                chat_id,
+                path,
+                caption=caption,
+                message_thread_id=message_thread_id,
+            )
 
     def _process_snapshot(self, job: Job) -> None:
         payload = job.payload
         camera_id = str(payload["camera_id"])
         path = record_snapshot(self.settings, camera_id, job.id)
         caption = payload.get("message") or f"Snapshot {camera_id}"
+        message_thread_id = _message_thread_id(payload)
         for chat_id in _chat_ids(payload):
-            self._require_telegram().send_photo(chat_id, path, caption=caption)
+            self._require_telegram().send_photo(
+                chat_id,
+                path,
+                caption=caption,
+                message_thread_id=message_thread_id,
+            )
 
     def _process_home_assistant(self, job: Job) -> None:
         payload = job.payload
@@ -121,10 +133,12 @@ class JobProcessor:
             service=str(payload["service"]),
             data=dict(payload.get("data") or {}),
         )
+        message_thread_id = _message_thread_id(payload)
         for chat_id in _chat_ids(payload):
             self._require_telegram().send_message(
                 chat_id,
                 f"Home Assistant service executed: {payload['domain']}.{payload['service']}",
+                message_thread_id=message_thread_id,
             )
         logger.debug("Home Assistant result for job %s: %s", job.id, result)
 
@@ -133,17 +147,19 @@ class JobProcessor:
         text = str(payload.get("text") or "")
         if not text:
             raise ValueError("send_message job requires payload.text")
+        message_thread_id = _message_thread_id(payload)
         for chat_id in _chat_ids(payload):
-            self._require_telegram().send_message(chat_id, text)
+            self._require_telegram().send_message(chat_id, text, message_thread_id=message_thread_id)
 
     def _notify_failure(self, job: Job, error: str) -> None:
         chat_ids = _chat_ids(job.payload)
         if not chat_ids or self.telegram is None:
             return
         text = f"Job failed: {job.id}\n{error[:500]}"
+        message_thread_id = _message_thread_id(job.payload)
         for chat_id in chat_ids:
             try:
-                self.telegram.send_message(chat_id, text)
+                self.telegram.send_message(chat_id, text, message_thread_id=message_thread_id)
             except Exception:
                 logger.exception("Failed to notify chat %s about job failure", chat_id)
 
@@ -155,3 +171,8 @@ class JobProcessor:
 
 def _chat_ids(payload: dict[str, Any]) -> list[int]:
     return [int(chat_id) for chat_id in payload.get("chat_ids") or []]
+
+
+def _message_thread_id(payload: dict[str, Any]) -> int | None:
+    value = payload.get("message_thread_id")
+    return int(value) if value is not None else None

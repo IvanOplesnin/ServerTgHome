@@ -62,6 +62,31 @@ POSTGRES_PASSWORD=change-this-password
 Fill `telegram.allowed_chat_ids` and `telegram.default_chat_ids` in `config/config.yaml`.
 Send `/start` to the bot to see your `chat_id`.
 
+If the bot should post to a specific group topic, add it to a supergroup with topics enabled and send `/start` in the target topic.
+The bot will show `Chat id` and `Topic message_thread_id`. To send all default events to that topic, set:
+
+```yaml
+telegram:
+  allowed_chat_ids:
+    - -1001234567890
+  default_chat_ids:
+    - -1001234567890
+  default_message_thread_id: 123
+```
+
+You can override the topic for a specific event:
+
+```yaml
+events:
+  door_open:
+    camera_id: "entrance"
+    chat_ids:
+      - -1001234567890
+    message_thread_id: 123
+```
+
+When `message_thread_id` is not set, the bot sends messages to a normal chat or the group's general topic. `/clip`, `/snapshot` and `/status` commands sent from a topic reply to the same topic automatically.
+
 Start:
 
 ```bash

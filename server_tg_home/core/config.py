@@ -35,6 +35,7 @@ class TelegramConfig(BaseModel):
     proxy_url: str | None = None
     allowed_chat_ids: list[int] = Field(default_factory=list)
     default_chat_ids: list[int] = Field(default_factory=list)
+    default_message_thread_id: int | None = None
     request_timeout_sec: int = 180
     polling_timeout_sec: int = 30
 
@@ -54,6 +55,7 @@ class StorageConfig(BaseModel):
     warning_cooldown_sec: int = 3600
     retention_poll_sec: int = 300
     notify_chat_ids: list[int] = Field(default_factory=list)
+    notify_message_thread_id: int | None = None
 
     @property
     def max_size_bytes(self) -> int:
@@ -125,6 +127,7 @@ class EventConfig(BaseModel):
     duration_sec: int = 20
     pre_event_sec: int | None = None
     chat_ids: list[int] = Field(default_factory=list)
+    message_thread_id: int | None = None
     message: str | None = None
 
 

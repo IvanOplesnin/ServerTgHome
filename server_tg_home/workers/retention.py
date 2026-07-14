@@ -107,11 +107,16 @@ class RetentionWorker:
 
     def _notify(self, text: str) -> None:
         chat_ids = self.settings.storage.notify_chat_ids or self.settings.telegram.default_chat_ids
+        message_thread_id = (
+            self.settings.storage.notify_message_thread_id
+            if self.settings.storage.notify_message_thread_id is not None
+            else self.settings.telegram.default_message_thread_id
+        )
         if self.telegram is None or not chat_ids:
             logger.info(text.replace("\n", " | "))
             return
         for chat_id in chat_ids:
             try:
-                self.telegram.send_message(chat_id, text)
+                self.telegram.send_message(chat_id, text, message_thread_id=message_thread_id)
             except Exception:
                 logger.exception("Failed to send retention notification to chat %s", chat_id)

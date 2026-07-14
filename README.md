@@ -62,6 +62,31 @@ POSTGRES_PASSWORD=change-this-password
 Заполните `telegram.allowed_chat_ids` и `telegram.default_chat_ids` в `config/config.yaml`.
 Чтобы узнать `chat_id`, отправьте боту команду `/start`.
 
+Если бот должен писать в конкретную тему группового чата, добавьте бота в супергруппу с включенными темами и отправьте `/start` прямо в нужной теме.
+Бот покажет `Chat id` и `Topic message_thread_id`. Для отправки всех событий в эту тему укажите:
+
+```yaml
+telegram:
+  allowed_chat_ids:
+    - -1001234567890
+  default_chat_ids:
+    - -1001234567890
+  default_message_thread_id: 123
+```
+
+Для отдельного события тему можно переопределить:
+
+```yaml
+events:
+  door_open:
+    camera_id: "entrance"
+    chat_ids:
+      - -1001234567890
+    message_thread_id: 123
+```
+
+Если `message_thread_id` не задан, бот отправляет сообщения в обычный чат или в общий раздел группы. Команды `/clip`, `/snapshot`, `/status`, отправленные из темы, отвечают в эту же тему автоматически.
+
 Запуск:
 
 ```bash

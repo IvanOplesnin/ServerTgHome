@@ -25,6 +25,7 @@ class RecordVideoRequest(BaseModel):
     duration_sec: int | None = None
     pre_event_sec: int | None = None
     chat_ids: list[int] | None = None
+    message_thread_id: int | None = None
     message: str | None = None
 
 
@@ -137,6 +138,7 @@ def create_app() -> FastAPI:
                     duration_sec=max(1, min(duration, 300)),
                     pre_event_sec=body.pre_event_sec,
                     chat_ids=body.chat_ids,
+                    message_thread_id=body.message_thread_id,
                     message=body.message,
                     event_payload={},
                 )

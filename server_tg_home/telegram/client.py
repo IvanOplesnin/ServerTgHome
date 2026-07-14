@@ -30,16 +30,42 @@ class AsyncTelegramClient:
     async def close(self) -> None:
         await self.bot.session.close()
 
-    async def send_message(self, chat_id: int, text: str) -> None:
-        await self._call(self.bot.send_message(chat_id=chat_id, text=text))
+    async def send_message(
+        self,
+        chat_id: int,
+        text: str,
+        message_thread_id: int | None = None,
+    ) -> None:
+        kwargs = {"chat_id": chat_id, "text": text}
+        if message_thread_id is not None:
+            kwargs["message_thread_id"] = message_thread_id
+        await self._call(self.bot.send_message(**kwargs))
 
-    async def send_video(self, chat_id: int, path: Path, caption: str | None = None) -> None:
+    async def send_video(
+        self,
+        chat_id: int,
+        path: Path,
+        caption: str | None = None,
+        message_thread_id: int | None = None,
+    ) -> None:
         video = FSInputFile(path)
-        await self._call(self.bot.send_video(chat_id=chat_id, video=video, caption=caption))
+        kwargs = {"chat_id": chat_id, "video": video, "caption": caption}
+        if message_thread_id is not None:
+            kwargs["message_thread_id"] = message_thread_id
+        await self._call(self.bot.send_video(**kwargs))
 
-    async def send_photo(self, chat_id: int, path: Path, caption: str | None = None) -> None:
+    async def send_photo(
+        self,
+        chat_id: int,
+        path: Path,
+        caption: str | None = None,
+        message_thread_id: int | None = None,
+    ) -> None:
         photo = FSInputFile(path)
-        await self._call(self.bot.send_photo(chat_id=chat_id, photo=photo, caption=caption))
+        kwargs = {"chat_id": chat_id, "photo": photo, "caption": caption}
+        if message_thread_id is not None:
+            kwargs["message_thread_id"] = message_thread_id
+        await self._call(self.bot.send_photo(**kwargs))
 
     async def _call(self, awaitable) -> None:
         try:
@@ -54,14 +80,45 @@ class TelegramClient:
             raise ValueError("telegram.bot_token is required")
         self.config = config
 
-    def send_message(self, chat_id: int, text: str) -> None:
-        self._run(lambda client: client.send_message(chat_id, text))
+    def send_message(
+        self,
+        chat_id: int,
+        text: str,
+        message_thread_id: int | None = None,
+    ) -> None:
+        self._run(lambda client: client.send_message(chat_id, text, message_thread_id=message_thread_id))
 
-    def send_video(self, chat_id: int, path: Path, caption: str | None = None) -> None:
-        self._run(lambda client: client.send_video(chat_id, path, caption=caption))
+    def send_video(
+        self,
+        chat_id: int,
+        path: Path,
+        caption: str | None = None,
+        message_thread_id: int | None = None,
+    ) -> None:
+        self._run(
+            lambda client: client.send_video(
+                chat_id,
+                path,
+                caption=caption,
+                message_thread_id=message_thread_id,
+            )
+        )
 
-    def send_photo(self, chat_id: int, path: Path, caption: str | None = None) -> None:
-        self._run(lambda client: client.send_photo(chat_id, path, caption=caption))
+    def send_photo(
+        self,
+        chat_id: int,
+        path: Path,
+        caption: str | None = None,
+        message_thread_id: int | None = None,
+    ) -> None:
+        self._run(
+            lambda client: client.send_photo(
+                chat_id,
+                path,
+                caption=caption,
+                message_thread_id=message_thread_id,
+            )
+        )
 
     def _run(self, call) -> None:
         async def runner() -> None:

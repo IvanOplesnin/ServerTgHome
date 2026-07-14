@@ -13,6 +13,7 @@ telegram:
   proxy_url: "${TELEGRAM_PROXY_URL:-}"
   allowed_chat_ids: []
   default_chat_ids: []
+  default_message_thread_id: null
   request_timeout_sec: 180
 
 home_assistant:
@@ -29,6 +30,7 @@ storage:
   warning_cooldown_sec: 3600
   retention_poll_sec: 300
   notify_chat_ids: []
+  notify_message_thread_id: null
 
 buffer:
   enabled: true
@@ -83,4 +85,5 @@ events:
     duration_sec: 20
     pre_event_sec: 4
     chat_ids: []
+    message_thread_id: null
     message: "Door opened"

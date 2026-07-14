@@ -13,6 +13,12 @@ def resolve_chat_ids(settings: Settings, event_chat_ids: list[int] | None = None
     return settings.telegram.default_chat_ids
 
 
+def resolve_message_thread_id(settings: Settings, message_thread_id: int | None = None) -> int | None:
+    if message_thread_id is not None:
+        return message_thread_id
+    return settings.telegram.default_message_thread_id
+
+
 def create_record_video_job(
     settings: Settings,
     session: Session,
@@ -23,6 +29,7 @@ def create_record_video_job(
     duration_sec: int,
     pre_event_sec: int | None,
     chat_ids: list[int] | None,
+    message_thread_id: int | None,
     message: str | None,
     event_id: str | None = None,
     event_payload: dict | None = None,
@@ -36,6 +43,7 @@ def create_record_video_job(
         if pre_event_sec is not None
         else settings.buffer.pre_event_seconds,
         "chat_ids": resolve_chat_ids(settings, chat_ids),
+        "message_thread_id": resolve_message_thread_id(settings, message_thread_id),
         "message": message,
         "event_id": event_id,
         "event_payload": event_payload or {},
@@ -69,6 +77,7 @@ def create_event_job(
         duration_sec=event.duration_sec,
         pre_event_sec=event.pre_event_sec,
         chat_ids=event.chat_ids,
+        message_thread_id=event.message_thread_id,
         message=event.message,
         event_id=event_id,
         event_payload=event_payload,
@@ -83,6 +92,7 @@ def create_snapshot_job(
     source: str,
     camera_id: str,
     chat_ids: list[int] | None,
+    message_thread_id: int | None,
     message: str | None = None,
 ) -> str:
     if camera_id not in settings.cameras:
@@ -95,6 +105,7 @@ def create_snapshot_job(
         payload={
             "camera_id": camera_id,
             "chat_ids": resolve_chat_ids(settings, chat_ids),
+            "message_thread_id": resolve_message_thread_id(settings, message_thread_id),
             "message": message,
             "event_time": iso_utc_now(),
         },
@@ -112,6 +123,7 @@ def create_home_assistant_service_job(
     service: str,
     data: dict,
     chat_ids: list[int] | None,
+    message_thread_id: int | None,
 ) -> str:
     job = create_job(
         session,
@@ -123,6 +135,7 @@ def create_home_assistant_service_job(
             "service": service,
             "data": data,
             "chat_ids": resolve_chat_ids(settings, chat_ids),
+            "message_thread_id": resolve_message_thread_id(settings, message_thread_id),
             "event_time": iso_utc_now(),
         },
     )
