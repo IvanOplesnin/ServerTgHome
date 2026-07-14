@@ -117,6 +117,8 @@ rest_command:
 
 ## Telegram Commands
 
+The bot registers the Telegram command menu automatically, so typing `/` shows the available commands in the client.
+
 - `/start`: shows the current `chat_id`.
 - `/clip entrance 20`: records and sends a 20 second clip.
 - `/snapshot entrance`: captures and sends one camera frame.

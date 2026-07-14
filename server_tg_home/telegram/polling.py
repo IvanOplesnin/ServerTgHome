@@ -7,7 +7,7 @@ from contextlib import suppress
 from aiogram import Dispatcher, F
 from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message
+from aiogram.types import BotCommand, Message
 
 from server_tg_home.core.config import Settings
 from server_tg_home.core.status import build_status_text
@@ -21,6 +21,16 @@ from server_tg_home.jobs.queue import JobQueue
 from server_tg_home.telegram.client import AsyncTelegramClient, TelegramApiError, chat_is_allowed
 
 logger = logging.getLogger(__name__)
+
+
+TELEGRAM_COMMANDS: tuple[tuple[str, str, str], ...] = (
+    ("start", "Show chat and topic id", "/start"),
+    ("help", "Show available commands", "/help"),
+    ("clip", "Record and send a camera clip", "/clip <camera> [seconds]"),
+    ("snapshot", "Capture and send one camera frame", "/snapshot <camera>"),
+    ("ac_on", "Turn on a Home Assistant climate entity", "/ac_on <climate.entity_id>"),
+    ("status", "Show service status", "/status"),
+)
 
 
 class TelegramPolling:
@@ -39,6 +49,7 @@ class TelegramPolling:
     async def run(self) -> None:
         logger.info("Telegram polling started with aiogram")
         try:
+            await self._setup_bot_commands()
             await self.dispatcher.start_polling(
                 self.client.bot,
                 polling_timeout=self.settings.telegram.polling_timeout_sec,
@@ -53,6 +64,17 @@ class TelegramPolling:
             raise
         finally:
             logger.info("Telegram polling stopped")
+
+    async def _setup_bot_commands(self) -> None:
+        commands = [
+            BotCommand(command=command, description=description)
+            for command, description, _ in TELEGRAM_COMMANDS
+        ]
+        try:
+            await self.client.bot.set_my_commands(commands)
+            logger.info("Telegram bot command menu configured")
+        except (TelegramAPIError, TelegramNetworkError):
+            logger.warning("Failed to configure Telegram bot commands", exc_info=True)
 
     def _register_handlers(self) -> None:
         @self.dispatcher.message(CommandStart())
@@ -139,13 +161,11 @@ class TelegramPolling:
         return chat_id, message_thread_id
 
     async def _handle_help(self, chat_id: int, message_thread_id: int | None, args: list[str]) -> None:
+        lines = ["Commands:"]
+        lines.extend(f"{usage} - {description}" for _, description, usage in TELEGRAM_COMMANDS)
         await self._reply(
             chat_id,
-            "Commands:\n"
-            "/clip <camera> [seconds]\n"
-            "/snapshot <camera>\n"
-            "/ac_on <climate.entity_id>\n"
-            "/status",
+            "\n".join(lines),
             message_thread_id=message_thread_id,
         )
 
