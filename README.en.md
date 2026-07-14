@@ -93,6 +93,76 @@ Start:
 docker compose up --build
 ```
 
+## Ubuntu Server Deployment
+
+For a mini PC, the best option for now is git-based deployment: keep the repository on the server and build Docker images locally with `docker compose build`.
+A separate Docker registry is not needed yet because the project is small and already includes `Dockerfile`/`docker-compose.yml`.
+
+If the repository is private, create an SSH deploy key on the server first:
+
+```bash
+ssh-keygen -t ed25519 -C "server-tg-home-deploy-$(hostname)" -f ~/.ssh/server_tg_home_github -N ""
+
+cat >> ~/.ssh/config <<'EOF'
+Host github-servertghome
+  HostName github.com
+  User git
+  IdentityFile ~/.ssh/server_tg_home_github
+  IdentitiesOnly yes
+EOF
+
+cat ~/.ssh/server_tg_home_github.pub
+```
+
+If `scripts/deploy.sh` is already available on the server, you can do the same with `./scripts/deploy.sh ssh-key`.
+
+Add the printed public key to the GitHub repository settings as a Deploy key. Read-only access is enough for updates.
+
+Initial setup:
+
+```bash
+sudo mkdir -p /opt/server-tg-home
+sudo chown "$USER:$USER" /opt/server-tg-home
+git clone git@github-servertghome:IvanOplesnin/ServerTgHome.git /opt/server-tg-home
+cd /opt/server-tg-home
+
+./scripts/deploy.sh init
+nano .env
+nano config/config.yaml
+./scripts/deploy.sh deploy
+```
+
+`init` installs Docker Engine and the Docker Compose plugin if they are missing, then creates `.env` and `config/config.yaml`.
+If those files were created for the first time, the stack is not started automatically: fill Telegram token, RTSP URL, chat ids and the rest of the settings first.
+
+Manual update:
+
+```bash
+cd /opt/server-tg-home
+./scripts/deploy.sh deploy
+```
+
+The script runs `git pull --ff-only`, rebuilds the application when code changed, and runs `docker compose up -d`.
+To also check base Docker image updates for `postgres` and `redis`, run `STH_PULL_IMAGES=1 ./scripts/deploy.sh deploy`.
+
+Automatic update checks with a systemd timer:
+
+```bash
+cd /opt/server-tg-home
+./scripts/deploy.sh install-timer
+```
+
+The timer checks for updates every 10 minutes by default. Install it as the same user that owns the GitHub SSH key.
+
+Useful commands:
+
+```bash
+./scripts/deploy.sh status
+./scripts/deploy.sh logs
+./scripts/deploy.sh restart
+./scripts/deploy.sh uninstall-timer
+```
+
 ## Home Assistant Webhook Example
 
 ```yaml

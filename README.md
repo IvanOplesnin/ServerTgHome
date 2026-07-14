@@ -93,6 +93,76 @@ events:
 docker compose up --build
 ```
 
+## Деплой на Ubuntu Server
+
+Для мини-ПК лучший вариант сейчас: хранить код в git на сервере и собирать Docker-образы локально через `docker compose build`.
+Отдельный Docker registry пока не нужен, потому что проект небольшой и уже содержит `Dockerfile`/`docker-compose.yml`.
+
+Если репозиторий приватный, сначала создайте на сервере SSH deploy key:
+
+```bash
+ssh-keygen -t ed25519 -C "server-tg-home-deploy-$(hostname)" -f ~/.ssh/server_tg_home_github -N ""
+
+cat >> ~/.ssh/config <<'EOF'
+Host github-servertghome
+  HostName github.com
+  User git
+  IdentityFile ~/.ssh/server_tg_home_github
+  IdentitiesOnly yes
+EOF
+
+cat ~/.ssh/server_tg_home_github.pub
+```
+
+Если `scripts/deploy.sh` уже доступен на сервере, то же самое можно сделать командой `./scripts/deploy.sh ssh-key`.
+
+Добавьте выведенный public key в GitHub repository settings как Deploy key. Для обновлений достаточно read-only доступа.
+
+Первичная установка:
+
+```bash
+sudo mkdir -p /opt/server-tg-home
+sudo chown "$USER:$USER" /opt/server-tg-home
+git clone git@github-servertghome:IvanOplesnin/ServerTgHome.git /opt/server-tg-home
+cd /opt/server-tg-home
+
+./scripts/deploy.sh init
+nano .env
+nano config/config.yaml
+./scripts/deploy.sh deploy
+```
+
+`init` установит Docker Engine и Docker Compose plugin, если они отсутствуют, создаст `.env` и `config/config.yaml`.
+Если эти файлы были созданы впервые, сервис не стартует автоматически: сначала нужно заполнить Telegram token, RTSP URL, chat ids и остальные настройки.
+
+Ручное обновление:
+
+```bash
+cd /opt/server-tg-home
+./scripts/deploy.sh deploy
+```
+
+Скрипт делает `git pull --ff-only`, пересобирает приложение при изменениях и запускает `docker compose up -d`.
+Чтобы дополнительно проверить обновления базовых Docker-образов `postgres` и `redis`, запустите `STH_PULL_IMAGES=1 ./scripts/deploy.sh deploy`.
+
+Автоматическая проверка обновлений через systemd timer:
+
+```bash
+cd /opt/server-tg-home
+./scripts/deploy.sh install-timer
+```
+
+Timer по умолчанию проверяет обновления каждые 10 минут. Устанавливайте его от того же пользователя, у которого настроен SSH-ключ к GitHub.
+
+Полезные команды:
+
+```bash
+./scripts/deploy.sh status
+./scripts/deploy.sh logs
+./scripts/deploy.sh restart
+./scripts/deploy.sh uninstall-timer
+```
+
 ## Пример webhook из Home Assistant
 
 ```yaml
