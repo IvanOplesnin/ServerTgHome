@@ -163,6 +163,27 @@ Useful commands:
 ./scripts/deploy.sh uninstall-timer
 ```
 
+Backup:
+
+```bash
+./scripts/backup.sh
+```
+
+By default, the backup includes Postgres, `.env` and `config/config.yaml`. Videos are not included so the archive does not become too large.
+To include the `data` directory too, run:
+
+```bash
+STH_BACKUP_INCLUDE_DATA=1 ./scripts/backup.sh
+```
+
+Restore:
+
+```bash
+./scripts/restore.sh backups/server-tg-home-YYYYMMDD-HHMMSS.tar.gz
+```
+
+Before restoring, current `.env`, `config/config.yaml` and `data` are saved next to them with a `restore-before-*` suffix.
+
 ## Home Assistant Webhook Example
 
 ```yaml

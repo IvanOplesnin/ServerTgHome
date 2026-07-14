@@ -163,6 +163,27 @@ Timer по умолчанию проверяет обновления кажды
 ./scripts/deploy.sh uninstall-timer
 ```
 
+Резервная копия:
+
+```bash
+./scripts/backup.sh
+```
+
+По умолчанию в backup попадают Postgres, `.env` и `config/config.yaml`. Видео не включаются, чтобы архив не стал слишком большим.
+Если нужно сохранить и папку `data`, запустите:
+
+```bash
+STH_BACKUP_INCLUDE_DATA=1 ./scripts/backup.sh
+```
+
+Восстановление:
+
+```bash
+./scripts/restore.sh backups/server-tg-home-YYYYMMDD-HHMMSS.tar.gz
+```
+
+Перед восстановлением текущие `.env`, `config/config.yaml` и `data` сохраняются рядом с суффиксом `restore-before-*`.
+
 ## Пример webhook из Home Assistant
 
 ```yaml

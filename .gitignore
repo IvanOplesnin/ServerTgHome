@@ -5,6 +5,7 @@ __pycache__/
 .env
 .idea/
 data/
+backups/
 dist/
 build/
 .pytest_cache/
