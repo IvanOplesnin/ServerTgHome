@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import hashlib
+import json
+from datetime import UTC, datetime, timedelta
+
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from server_tg_home.core.config import EventConfig, Settings
 from server_tg_home.core.runtime_state import notifications_enabled
+from server_tg_home.database.models import Job
 from server_tg_home.jobs.queue import JobQueue
 from server_tg_home.jobs.repository import create_job, iso_utc_now
 
@@ -34,6 +40,7 @@ def create_record_video_job(
     message: str | None,
     event_id: str | None = None,
     event_payload: dict | None = None,
+    event_signature: str | None = None,
 ) -> str:
     if camera_id not in settings.cameras:
         raise ValueError(f"Unknown camera: {camera_id}")
@@ -48,6 +55,7 @@ def create_record_video_job(
         "message": message,
         "event_id": event_id,
         "event_payload": event_payload or {},
+        "event_signature": event_signature,
         "event_time": iso_utc_now(),
     }
     job = create_job(
@@ -72,6 +80,9 @@ def create_event_job(
     enabled, _ = notifications_enabled(session)
     if not enabled:
         return None
+    event_signature = build_event_signature(event_id, event_payload or {})
+    if _is_event_suppressed(session, event_id, event_signature, event):
+        return None
     return create_record_video_job(
         settings,
         session,
@@ -85,6 +96,7 @@ def create_event_job(
         message=event.message,
         event_id=event_id,
         event_payload=event_payload,
+        event_signature=event_signature,
     )
 
 
@@ -115,6 +127,53 @@ def create_snapshot_job(
         },
     )
     return job.id
+
+
+def build_event_signature(event_id: str, event_payload: dict) -> str:
+    data = {"event_id": event_id, "payload": event_payload}
+    encoded = json.dumps(data, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _is_event_suppressed(
+    session: Session,
+    event_id: str,
+    event_signature: str,
+    event: EventConfig,
+) -> bool:
+    now = datetime.now(UTC)
+    lookback_sec = max(event.cooldown_sec, event.dedupe_window_sec, 0)
+    if lookback_sec <= 0:
+        return False
+
+    cutoff = now - timedelta(seconds=lookback_sec)
+    jobs = session.execute(
+        select(Job)
+        .where(Job.source == "home_assistant", Job.created_at >= cutoff)
+        .order_by(Job.created_at.desc())
+        .limit(100)
+    ).scalars()
+
+    for job in jobs:
+        payload = job.payload or {}
+        if payload.get("event_id") != event_id:
+            continue
+        age_sec = (now - _as_utc(job.created_at)).total_seconds()
+        if event.cooldown_sec > 0 and age_sec <= event.cooldown_sec:
+            return True
+        if (
+            event.dedupe_window_sec > 0
+            and age_sec <= event.dedupe_window_sec
+            and payload.get("event_signature") == event_signature
+        ):
+            return True
+    return False
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def create_home_assistant_service_job(

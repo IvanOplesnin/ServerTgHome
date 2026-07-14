@@ -84,6 +84,8 @@ events:
     camera_id: "entrance"
     duration_sec: 20
     pre_event_sec: 4
+    cooldown_sec: 30
+    dedupe_window_sec: 5
     chat_ids: []
     message_thread_id: null
     message: "Door opened"

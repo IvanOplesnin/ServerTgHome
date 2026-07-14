@@ -126,6 +126,8 @@ class EventConfig(BaseModel):
     camera_id: str
     duration_sec: int = 20
     pre_event_sec: int | None = None
+    cooldown_sec: int = 0
+    dedupe_window_sec: int = 5
     chat_ids: list[int] = Field(default_factory=list)
     message_thread_id: int | None = None
     message: str | None = None

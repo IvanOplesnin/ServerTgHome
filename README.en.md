@@ -221,14 +221,21 @@ events:
     camera_id: "entrance"
     duration_sec: 20
     pre_event_sec: 4
+    cooldown_sec: 30
+    dedupe_window_sec: 5
     message: "Door opened"
 
   yard_motion:
     camera_id: "yard"
     duration_sec: 20
     pre_event_sec: 4
+    cooldown_sec: 30
+    dedupe_window_sec: 5
     message: "Yard motion"
 ```
+
+`cooldown_sec` prevents the same event from creating new jobs more often than the configured interval.
+`dedupe_window_sec` drops repeated webhooks with the same payload inside a short window.
 
 You do not need one `buffer` container per camera. One `buffer` process starts one `ffmpeg` process per camera with `buffer_enabled: true`.
 
