@@ -62,6 +62,18 @@ class TemperaturesConfig(BaseModel):
     stale_after_sec: int = 7200
 
 
+class GraphsConfig(BaseModel):
+    queue_name: str = "server_tg_home_graph_jobs"
+    path: Path = Path("./data/graphs")
+    default_window: str = "24h"
+    max_window: str = "30d"
+    width: int = 1200
+    height_per_panel: int = 360
+    scale: int = 2
+    history_retention_days: int = 180
+    artifact_retention_days: int = 14
+
+
 class StorageConfig(BaseModel):
     path: Path = Path("./data/clips")
     max_size_mb: int = 10_240
@@ -161,6 +173,7 @@ class Settings(BaseSettings):
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
     home_assistant: HomeAssistantConfig = Field(default_factory=HomeAssistantConfig)
     temperatures: TemperaturesConfig = Field(default_factory=TemperaturesConfig)
+    graphs: GraphsConfig = Field(default_factory=GraphsConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     buffer: BufferConfig = Field(default_factory=BufferConfig)
     cameras: dict[str, CameraConfig] = Field(default_factory=dict)

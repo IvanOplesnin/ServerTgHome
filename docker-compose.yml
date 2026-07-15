@@ -65,6 +65,26 @@ services:
       redis:
         condition: service_started
 
+  graph-worker:
+    build: .
+    restart: unless-stopped
+    command: ["server-tg-home", "graph-worker"]
+    environment:
+      STH_CONFIG: /app/config/config.yaml
+      POSTGRES_DB: ${POSTGRES_DB:-server_tg_home}
+      POSTGRES_USER: ${POSTGRES_USER:-server_tg_home}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-server_tg_home_password}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_PROXY_URL: ${TELEGRAM_PROXY_URL:-}
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
   buffer:
     build: .
     restart: unless-stopped

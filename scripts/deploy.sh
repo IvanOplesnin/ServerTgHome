@@ -235,7 +235,7 @@ EOF
 stack_running() {
   local services
   services="$(compose ps --status running --services 2>/dev/null || true)"
-  for service in postgres redis api worker buffer retention; do
+  for service in postgres redis api worker graph-worker buffer retention; do
     if ! printf '%s\n' "$services" | grep -qx "$service"; then
       return 1
     fi

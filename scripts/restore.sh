@@ -70,7 +70,7 @@ tar -xzf "$backup_path" -C "$tmp_dir"
 timestamp="$(date -u +%Y%m%d-%H%M%S)"
 
 log "Stopping application services"
-compose stop api worker buffer retention >/dev/null 2>&1 || true
+compose stop api worker graph-worker buffer retention >/dev/null 2>&1 || true
 
 log "Saving current runtime files before restore"
 [ ! -f "$APP_DIR/.env" ] || cp "$APP_DIR/.env" "$APP_DIR/.env.restore-before-$timestamp"

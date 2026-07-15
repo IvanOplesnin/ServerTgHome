@@ -129,6 +129,44 @@ def create_snapshot_job(
     return job.id
 
 
+def create_sensor_graph_job(
+    settings: Settings,
+    session: Session,
+    queue: JobQueue,
+    *,
+    source: str,
+    room_id: str,
+    metrics: list[str],
+    window_sec: int,
+    chat_ids: list[int] | None,
+    message_thread_id: int | None,
+) -> str:
+    if room_id != "all" and room_id not in settings.temperatures.rooms:
+        raise ValueError(f"Unknown room: {room_id}")
+    allowed_metrics = {"temperature", "humidity"}
+    unknown_metrics = [metric for metric in metrics if metric not in allowed_metrics]
+    if unknown_metrics:
+        raise ValueError(f"Unknown graph metric: {unknown_metrics[0]}")
+    if not metrics:
+        raise ValueError("At least one graph metric is required")
+
+    job = create_job(
+        session,
+        queue,
+        job_type="sensor_graph",
+        source=source,
+        payload={
+            "room_id": room_id,
+            "metrics": metrics,
+            "window_sec": window_sec,
+            "chat_ids": resolve_chat_ids(settings, chat_ids),
+            "message_thread_id": resolve_message_thread_id(settings, message_thread_id),
+            "event_time": iso_utc_now(),
+        },
+    )
+    return job.id
+
+
 def build_event_signature(event_id: str, event_payload: dict) -> str:
     data = {"event_id": event_id, "payload": event_payload}
     encoded = json.dumps(data, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")

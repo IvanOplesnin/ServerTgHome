@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from apscheduler.schedulers.blocking import BlockingScheduler
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from server_tg_home.core.config import Settings
-from server_tg_home.database.models import Video, utcnow
+from server_tg_home.database.models import SensorReading, Video, utcnow
 from server_tg_home.database.session import new_session
 from server_tg_home.media.storage import ensure_storage, folder_size_bytes, format_bytes, iter_video_files
 from server_tg_home.telegram.client import TelegramClient
@@ -42,6 +43,9 @@ class RetentionWorker:
         scheduler.start()
 
     def check_once(self) -> None:
+        self._cleanup_sensor_history()
+        self._cleanup_graph_artifacts()
+
         size = folder_size_bytes(self.settings.storage.path)
         max_size = self.settings.storage.max_size_bytes
         if max_size <= 0:
@@ -104,6 +108,32 @@ class RetentionWorker:
             session.commit()
         finally:
             session.close()
+
+    def _cleanup_sensor_history(self) -> None:
+        retention_days = self.settings.graphs.history_retention_days
+        if retention_days <= 0:
+            return
+        cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+        session = new_session()
+        try:
+            session.execute(delete(SensorReading).where(SensorReading.received_at < cutoff))
+            session.commit()
+        finally:
+            session.close()
+
+    def _cleanup_graph_artifacts(self) -> None:
+        retention_days = self.settings.graphs.artifact_retention_days
+        if retention_days <= 0 or not self.settings.graphs.path.exists():
+            return
+        cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+        for path in self.settings.graphs.path.rglob("*"):
+            if not path.is_file():
+                continue
+            try:
+                if datetime.fromtimestamp(path.stat().st_mtime, UTC) < cutoff:
+                    path.unlink(missing_ok=True)
+            except FileNotFoundError:
+                continue
 
     def _notify(self, text: str) -> None:
         chat_ids = self.settings.storage.notify_chat_ids or self.settings.telegram.default_chat_ids

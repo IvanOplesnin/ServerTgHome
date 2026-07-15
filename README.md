@@ -8,10 +8,11 @@
 
 - `api`: FastAPI HTTP API для webhook-запросов Home Assistant и aiogram long polling для Telegram-бота.
 - `worker`: Dramatiq worker; получает `job_id`, читает детали задачи из БД и выполняет работу.
+- `graph-worker`: отдельный Dramatiq worker для построения Plotly-графиков.
 - `buffer`: поддерживает короткий постоянный RTSP-буфер по каждой камере.
 - `retention`: APScheduler-процесс, который следит за размером папки с видео, предупреждает через Telegram и удаляет старые ролики при переполнении.
 - `redis`: брокер очереди Dramatiq.
-- `postgres`: постоянное хранилище задач, статусов и истории видео.
+- `postgres`: постоянное хранилище задач, статусов, истории видео и истории датчиков.
 - `alembic`: миграции схемы базы данных.
 
 Очередь хранит только `job_id`. Payload задачи, статус, попытки выполнения и история хранятся в Postgres.
@@ -25,6 +26,7 @@ server_tg_home/
   database/       SQLAlchemy-сессия, ORM-модели и запуск Alembic.
   integrations/  Внешние системы кроме Telegram: Home Assistant и будущие API.
   jobs/           Создание задач, статусы в БД, очередь Dramatiq и акторы.
+  graphs/         Построение графиков Plotly и экспорт PNG/HTML.
   media/          ffmpeg-запись, RTSP-буфер и работа с файлами.
   telegram/       aiogram polling и клиент отправки сообщений в Telegram.
   workers/        Долгоживущие процессы: буфер камер и очистка хранилища.
@@ -36,6 +38,7 @@ server_tg_home/
 - HTTP-обработчики добавляются в `api/`.
 - Telegram-команды добавляются в `telegram/polling.py`.
 - Новые типы задач добавляются в `jobs/factory.py` и `jobs/processor.py`.
+- Рендеринг графиков добавляется в `graphs/`.
 - Прямые вызовы внешних сервисов добавляются в `integrations/`.
 - Логика видео, буфера и файлов добавляется в `media/`.
 - Долгоживущие циклы и планировщики добавляются в `workers/`.
@@ -208,6 +211,7 @@ rest_command:
 
 Температуру и влажность можно обновлять webhook-запросом. Сервис сохраняет последнее значение в Postgres, а команда `/temp` показывает последние данные.
 Старый payload только с `temperatures` продолжает работать; `humidities` можно добавлять позже без изменения старого контракта.
+Эти же webhook-запросы пишут историю в таблицу `sensor_readings`; она используется для графиков.
 
 ```yaml
 automation:
@@ -258,8 +262,18 @@ rest_command:
 - `/mute 1h`: временно отключает автоматические уведомления, `/mute off` снимает mute.
 - `/temp`: показывает температуру и влажность в спальне и гостиной.
 - `/humidity`: показывает влажность в спальне и гостиной.
+- `/graph bedroom 24h`: строит график температуры и влажности по спальне за 24 часа.
+- `/graph all 7d`: строит общий график по всем комнатам за 7 дней.
+- `/graph living_room 24h humidity`: строит только влажность по гостиной.
 - `/ac_on climate.bedroom`: вызывает `climate.turn_on` в Home Assistant.
 - `/status`: показывает статус Redis, очереди, БД и хранилища.
+
+Команда `/graph` создает задачу в отдельной очереди `graphs.queue_name`. `graph-worker` читает историю из `sensor_readings`, строит Plotly-график и отправляет в Telegram:
+
+- PNG-превью для быстрого просмотра в чате.
+- HTML-файл с интерактивным Plotly-графиком для zoom/hover/выключения серий.
+
+Артефакты сохраняются в `graphs.path`, по умолчанию `/data/graphs`. Старые HTML/PNG-файлы и история датчиков очищаются retention worker по настройкам `graphs.artifact_retention_days` и `graphs.history_retention_days`.
 
 ## Несколько камер
 

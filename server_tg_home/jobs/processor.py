@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from server_tg_home.core.config import Settings
 from server_tg_home.database.models import Job, Video
 from server_tg_home.database.session import new_session
+from server_tg_home.graphs.renderer import render_sensor_graph
 from server_tg_home.integrations.home_assistant import HomeAssistantClient
 from server_tg_home.jobs.repository import load_job, mark_done, mark_failed, mark_queued, mark_running
 from server_tg_home.media.recorder import record_event_clip, record_snapshot
@@ -45,6 +46,8 @@ class JobProcessor:
                 self._process_home_assistant(job)
             elif job.type == "send_message":
                 self._process_send_message(job)
+            elif job.type == "sensor_graph":
+                self._process_sensor_graph(session, job)
             else:
                 raise ValueError(f"Unknown job type: {job.type}")
 
@@ -151,6 +154,34 @@ class JobProcessor:
         for chat_id in _chat_ids(payload):
             self._require_telegram().send_message(chat_id, text, message_thread_id=message_thread_id)
 
+    def _process_sensor_graph(self, session: Session, job: Job) -> None:
+        payload = job.payload
+        room_id = str(payload["room_id"])
+        metrics = [str(metric) for metric in payload.get("metrics") or []]
+        window_sec = int(payload["window_sec"])
+        result = render_sensor_graph(
+            self.settings,
+            session,
+            job_id=job.id,
+            room_id=room_id,
+            metrics=metrics,
+            window_sec=window_sec,
+        )
+        message_thread_id = _message_thread_id(payload)
+        for chat_id in _chat_ids(payload):
+            self._require_telegram().send_photo(
+                chat_id,
+                result.png_path,
+                caption=_truncate_caption(result.caption),
+                message_thread_id=message_thread_id,
+            )
+            self._require_telegram().send_document(
+                chat_id,
+                result.html_path,
+                caption="Интерактивный график Plotly",
+                message_thread_id=message_thread_id,
+            )
+
     def _notify_failure(self, job: Job, error: str) -> None:
         chat_ids = _chat_ids(job.payload)
         if not chat_ids or self.telegram is None:
@@ -176,3 +207,9 @@ def _chat_ids(payload: dict[str, Any]) -> list[int]:
 def _message_thread_id(payload: dict[str, Any]) -> int | None:
     value = payload.get("message_thread_id")
     return int(value) if value is not None else None
+
+
+def _truncate_caption(value: str, limit: int = 1000) -> str:
+    if len(value) <= limit:
+        return value
+    return value[: limit - 1] + "…"

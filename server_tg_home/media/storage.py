@@ -13,6 +13,7 @@ def ensure_storage(settings: Settings) -> None:
     settings.storage.path.mkdir(parents=True, exist_ok=True)
     (settings.storage.path / "tmp").mkdir(parents=True, exist_ok=True)
     settings.buffer.path.mkdir(parents=True, exist_ok=True)
+    settings.graphs.path.mkdir(parents=True, exist_ok=True)
 
 
 def make_clip_path(settings: Settings, camera_id: str, job_id: str) -> Path:

@@ -31,6 +31,17 @@ temperatures:
     living_room:
       title: "Гостиная"
 
+graphs:
+  queue_name: "server_tg_home_graph_jobs"
+  path: "/data/graphs"
+  default_window: "24h"
+  max_window: "30d"
+  width: 1200
+  height_per_panel: 360
+  scale: 2
+  history_retention_days: 180
+  artifact_retention_days: 14
+
 storage:
   path: "/data/clips"
   max_size_mb: 10240

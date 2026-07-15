@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from html import escape
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -8,7 +9,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from server_tg_home.core.config import Settings
-from server_tg_home.database.models import AppState, utcnow
+from server_tg_home.database.models import AppState, SensorReading, utcnow
 
 TEMPERATURE_KEY_PREFIX = "temperature:"
 HUMIDITY_KEY_PREFIX = "humidity:"
@@ -69,12 +70,22 @@ def update_temperatures_from_payload(
             continue
         unit = _metric_unit(item, payload, settings, metric="temperature", default_metric=default_metric)
         entity_id = item.get("temperature_entity_id") or item.get("entity_id")
+        entity_id_value = str(entity_id) if entity_id else None
         update_temperature(
             session,
             room_id=room_id,
             temperature=temperature,
             unit=unit,
-            entity_id=str(entity_id) if entity_id else None,
+            entity_id=entity_id_value,
+        )
+        add_sensor_reading(
+            session,
+            room_id=room_id,
+            metric="temperature",
+            value=temperature,
+            unit=unit,
+            entity_id=entity_id_value,
+            recorded_at=_recorded_at(item, payload, "temperature"),
         )
         updated.append(room_id)
 
@@ -88,12 +99,22 @@ def update_temperatures_from_payload(
             continue
         unit = _metric_unit(item, payload, settings, metric="humidity", default_metric=default_metric)
         entity_id = item.get("humidity_entity_id") or item.get("entity_id")
+        entity_id_value = str(entity_id) if entity_id else None
         update_humidity(
             session,
             room_id=room_id,
             humidity=humidity,
             unit=unit,
-            entity_id=str(entity_id) if entity_id else None,
+            entity_id=entity_id_value,
+        )
+        add_sensor_reading(
+            session,
+            room_id=room_id,
+            metric="humidity",
+            value=humidity,
+            unit=unit,
+            entity_id=entity_id_value,
+            recorded_at=_recorded_at(item, payload, "humidity"),
         )
         updated_humidity.append(room_id)
 
@@ -153,6 +174,28 @@ def update_humidity(
     row.updated_at = now
 
 
+def add_sensor_reading(
+    session: Session,
+    room_id: str,
+    metric: str,
+    value: float,
+    unit: str,
+    entity_id: str | None,
+    recorded_at: datetime,
+) -> None:
+    session.add(
+        SensorReading(
+            room_id=room_id,
+            metric=metric,
+            value=value,
+            unit=unit,
+            entity_id=entity_id,
+            recorded_at=recorded_at,
+            received_at=utcnow(),
+        )
+    )
+
+
 def get_temperature(session: Session, settings: Settings, room_id: str) -> TemperatureReading | None:
     room = settings.temperatures.rooms.get(room_id)
     if room is None:
@@ -199,24 +242,25 @@ def get_humidity(session: Session, settings: Settings, room_id: str) -> Humidity
     )
 
 
-def build_temperature_text(settings: Settings, session: Session) -> str:
+def build_temperature_text(settings: Settings, session: Session, *, html: bool = False) -> str:
     lines = ["Температура и влажность"]
     for room_id, room in settings.temperatures.rooms.items():
         temperature = get_temperature(session, settings, room_id)
         humidity = get_humidity(session, settings, room_id)
-        lines.append(
-            f"{room.title}: "
-            f"{_format_reading('температура', temperature, settings.temperatures.stale_after_sec)}, "
-            f"{_format_reading('влажность', humidity, settings.temperatures.stale_after_sec)}"
-        )
+        lines.append("")
+        lines.append(_format_title(room.title, html=html))
+        lines.append(_format_reading("Температура", temperature, settings.temperatures.stale_after_sec, html=html))
+        lines.append(_format_reading("Влажность", humidity, settings.temperatures.stale_after_sec, html=html))
     return "\n".join(lines)
 
 
-def build_humidity_text(settings: Settings, session: Session) -> str:
+def build_humidity_text(settings: Settings, session: Session, *, html: bool = False) -> str:
     lines = ["Влажность"]
     for room_id, room in settings.temperatures.rooms.items():
         humidity = get_humidity(session, settings, room_id)
-        lines.append(f"{room.title}: {_format_reading('влажность', humidity, settings.temperatures.stale_after_sec)}")
+        lines.append("")
+        lines.append(_format_title(room.title, html=html))
+        lines.append(_format_reading("Влажность", humidity, settings.temperatures.stale_after_sec, html=html))
     return "\n".join(lines)
 
 
@@ -303,6 +347,38 @@ def _metric_unit(
     )
 
 
+def _recorded_at(item: dict[str, Any], payload: dict[str, Any], metric: str) -> datetime:
+    for key in (
+        f"{metric}_recorded_at",
+        f"{metric}_timestamp",
+        "recorded_at",
+        "timestamp",
+    ):
+        if key in item:
+            return _parse_datetime(item[key])
+        if key in payload:
+            return _parse_datetime(payload[key])
+    return utcnow()
+
+
+def _parse_datetime(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, int | float) and not isinstance(value, bool):
+        return datetime.fromtimestamp(float(value), UTC)
+    else:
+        text = str(value).strip()
+        if not text:
+            return utcnow()
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return utcnow()
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
 def _parse_temperature(value: Any) -> float | None:
     if isinstance(value, bool) or value is None:
         return None
@@ -335,6 +411,8 @@ def _format_reading(
     label: str,
     reading: TemperatureReading | HumidityReading | None,
     stale_after_sec: int,
+    *,
+    html: bool,
 ) -> str:
     if reading is None:
         return f"{label}: нет данных"
@@ -343,7 +421,14 @@ def _format_reading(
     suffix = f"{_format_age(age.total_seconds())} назад"
     if age.total_seconds() > stale_after_sec:
         suffix += ", устарело"
-    return f"{label} {_format_temperature(value)} {reading.unit} ({suffix})"
+    formatted_value = f"{_format_temperature(value)} {reading.unit}"
+    if html:
+        formatted_value = f"<b>{escape(formatted_value)}</b>"
+    return f"{label}: {formatted_value} ({suffix})"
+
+
+def _format_title(title: str, *, html: bool) -> str:
+    return escape(title) if html else title
 
 
 def _format_temperature(value: float) -> str:

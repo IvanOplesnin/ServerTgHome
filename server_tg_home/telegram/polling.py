@@ -25,6 +25,7 @@ from server_tg_home.database.session import new_session
 from server_tg_home.jobs.factory import (
     create_home_assistant_service_job,
     create_record_video_job,
+    create_sensor_graph_job,
     create_snapshot_job,
 )
 from server_tg_home.jobs.queue import JobQueue
@@ -45,15 +46,17 @@ TELEGRAM_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("mute", "Mute event notifications temporarily", "/mute <duration|off>"),
     ("temp", "Show room temperatures", "/temp"),
     ("humidity", "Show room humidity", "/humidity"),
+    ("graph", "Build and send sensor graph", "/graph [room|all] [window] [metric]"),
     ("ac_on", "Turn on a Home Assistant climate entity", "/ac_on <climate.entity_id>"),
     ("status", "Show service status", "/status"),
 )
 
 
 class TelegramPolling:
-    def __init__(self, settings: Settings, queue: JobQueue) -> None:
+    def __init__(self, settings: Settings, queue: JobQueue, graph_queue: JobQueue) -> None:
         self.settings = settings
         self.queue = queue
+        self.graph_queue = graph_queue
         self.client = AsyncTelegramClient(settings.telegram)
         self.dispatcher = Dispatcher()
         self._register_handlers()
@@ -202,6 +205,14 @@ class TelegramPolling:
                 return
             chat_id, message_thread_id = context
             await self._handle_humidity(chat_id, message_thread_id, _message_args(message))
+
+        @self.dispatcher.message(Command("graph"))
+        async def command_graph(message: Message) -> None:
+            context = await self._allowed_chat_context(message)
+            if context is None:
+                return
+            chat_id, message_thread_id = context
+            await self._handle_graph(chat_id, message_thread_id, _message_args(message))
 
         @self.dispatcher.message(Command("status"))
         async def command_status(message: Message) -> None:
@@ -387,22 +398,53 @@ class TelegramPolling:
 
     async def _handle_temperature(self, chat_id: int, message_thread_id: int | None, args: list[str]) -> None:
         with new_session() as session:
-            text = build_temperature_text(self.settings, session)
-        await self._reply(chat_id, text, message_thread_id=message_thread_id)
+            text = build_temperature_text(self.settings, session, html=True)
+        await self._reply(chat_id, text, message_thread_id=message_thread_id, parse_mode="HTML")
 
     async def _handle_humidity(self, chat_id: int, message_thread_id: int | None, args: list[str]) -> None:
         with new_session() as session:
-            text = build_humidity_text(self.settings, session)
-        await self._reply(chat_id, text, message_thread_id=message_thread_id)
+            text = build_humidity_text(self.settings, session, html=True)
+        await self._reply(chat_id, text, message_thread_id=message_thread_id, parse_mode="HTML")
+
+    async def _handle_graph(self, chat_id: int, message_thread_id: int | None, args: list[str]) -> None:
+        parsed = _parse_graph_args(self.settings, args)
+        if isinstance(parsed, str):
+            await self._reply(chat_id, parsed, message_thread_id=message_thread_id)
+            return
+        room_id, window_sec, metrics = parsed
+        with new_session() as session:
+            job_id = create_sensor_graph_job(
+                self.settings,
+                session,
+                self.graph_queue,
+                source="telegram_command",
+                room_id=room_id,
+                metrics=metrics,
+                window_sec=window_sec,
+                chat_ids=[chat_id],
+                message_thread_id=message_thread_id,
+            )
+        await self._reply(chat_id, f"Graph job queued: {job_id}", message_thread_id=message_thread_id)
 
     async def _handle_status(self, chat_id: int, message_thread_id: int | None, args: list[str]) -> None:
         with new_session() as session:
             text = build_status_text(self.settings, session, self.queue)
         await self._reply(chat_id, text, message_thread_id=message_thread_id)
 
-    async def _reply(self, chat_id: int, text: str, message_thread_id: int | None = None) -> None:
+    async def _reply(
+        self,
+        chat_id: int,
+        text: str,
+        message_thread_id: int | None = None,
+        parse_mode: str | None = None,
+    ) -> None:
         with suppress(TelegramApiError, TelegramAPIError, TelegramNetworkError):
-            await self.client.send_message(chat_id, text, message_thread_id=message_thread_id)
+            await self.client.send_message(
+                chat_id,
+                text,
+                message_thread_id=message_thread_id,
+                parse_mode=parse_mode,
+            )
 
 
 def _message_chat_id(message: Message) -> int | None:
@@ -441,3 +483,51 @@ def _parse_duration(value: str) -> timedelta | None:
     if unit == "h":
         return timedelta(hours=amount)
     return timedelta(days=amount)
+
+
+def _parse_graph_args(settings: Settings, args: list[str]) -> tuple[str, int, list[str]] | str:
+    remaining = list(args)
+    room_id = "all"
+    if remaining:
+        candidate = remaining[0].lower()
+        if candidate == "all" or candidate in settings.temperatures.rooms:
+            room_id = candidate
+            remaining.pop(0)
+        elif _parse_duration(candidate) is None:
+            known = ", ".join(["all", *settings.temperatures.rooms.keys()])
+            return f"Unknown room: {candidate}. Available: {known}"
+
+    default_window = _parse_duration(settings.graphs.default_window) or timedelta(hours=24)
+    window = default_window
+    if remaining:
+        candidate_window = _parse_duration(remaining[0])
+        if candidate_window is not None:
+            window = candidate_window
+            remaining.pop(0)
+
+    max_window = _parse_duration(settings.graphs.max_window) or timedelta(days=30)
+    if window > max_window:
+        return f"Window is too large. Max: {settings.graphs.max_window}."
+
+    metrics = ["temperature", "humidity"]
+    if remaining:
+        metric = remaining.pop(0).lower()
+        parsed_metrics = _parse_graph_metrics(metric)
+        if parsed_metrics is None:
+            return "Metric must be temperature, humidity or all."
+        metrics = parsed_metrics
+
+    if remaining:
+        return "Usage: /graph [room|all] [window] [temperature|humidity|all]"
+
+    return room_id, max(60, int(window.total_seconds())), metrics
+
+
+def _parse_graph_metrics(value: str) -> list[str] | None:
+    if value in {"all", "climate", "both"}:
+        return ["temperature", "humidity"]
+    if value in {"temp", "temperature", "t"}:
+        return ["temperature"]
+    if value in {"hum", "humidity", "h"}:
+        return ["humidity"]
+    return None

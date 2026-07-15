@@ -35,10 +35,13 @@ class AsyncTelegramClient:
         chat_id: int,
         text: str,
         message_thread_id: int | None = None,
+        parse_mode: str | None = None,
     ) -> None:
         kwargs = {"chat_id": chat_id, "text": text}
         if message_thread_id is not None:
             kwargs["message_thread_id"] = message_thread_id
+        if parse_mode is not None:
+            kwargs["parse_mode"] = parse_mode
         await self._call(self.bot.send_message(**kwargs))
 
     async def send_video(
@@ -67,6 +70,19 @@ class AsyncTelegramClient:
             kwargs["message_thread_id"] = message_thread_id
         await self._call(self.bot.send_photo(**kwargs))
 
+    async def send_document(
+        self,
+        chat_id: int,
+        path: Path,
+        caption: str | None = None,
+        message_thread_id: int | None = None,
+    ) -> None:
+        document = FSInputFile(path)
+        kwargs = {"chat_id": chat_id, "document": document, "caption": caption}
+        if message_thread_id is not None:
+            kwargs["message_thread_id"] = message_thread_id
+        await self._call(self.bot.send_document(**kwargs))
+
     async def _call(self, awaitable) -> None:
         try:
             await awaitable
@@ -85,8 +101,16 @@ class TelegramClient:
         chat_id: int,
         text: str,
         message_thread_id: int | None = None,
+        parse_mode: str | None = None,
     ) -> None:
-        self._run(lambda client: client.send_message(chat_id, text, message_thread_id=message_thread_id))
+        self._run(
+            lambda client: client.send_message(
+                chat_id,
+                text,
+                message_thread_id=message_thread_id,
+                parse_mode=parse_mode,
+            )
+        )
 
     def send_video(
         self,
@@ -113,6 +137,22 @@ class TelegramClient:
     ) -> None:
         self._run(
             lambda client: client.send_photo(
+                chat_id,
+                path,
+                caption=caption,
+                message_thread_id=message_thread_id,
+            )
+        )
+
+    def send_document(
+        self,
+        chat_id: int,
+        path: Path,
+        caption: str | None = None,
+        message_thread_id: int | None = None,
+    ) -> None:
+        self._run(
+            lambda client: client.send_document(
                 chat_id,
                 path,
                 caption=caption,

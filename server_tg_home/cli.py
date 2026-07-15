@@ -24,6 +24,7 @@ def main() -> None:
     api.add_argument("--reload", action="store_true")
 
     subparsers.add_parser("worker", help="Run job worker")
+    subparsers.add_parser("graph-worker", help="Run graph rendering worker")
     subparsers.add_parser("buffer", help="Run RTSP buffer worker")
 
     retention = subparsers.add_parser("retention", help="Run storage retention worker")
@@ -60,6 +61,19 @@ def main() -> None:
                 "--threads",
                 "1",
                 "server_tg_home.jobs.tasks",
+            ],
+        )
+    elif args.command == "graph-worker":
+        init_db(settings.app.database_url)
+        os.execvp(
+            "dramatiq",
+            [
+                "dramatiq",
+                "--processes",
+                "1",
+                "--threads",
+                "1",
+                "server_tg_home.jobs.graph_tasks",
             ],
         )
     elif args.command == "buffer":

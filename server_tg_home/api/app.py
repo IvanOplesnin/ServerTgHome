@@ -38,14 +38,20 @@ def create_app() -> FastAPI:
         init_db(settings.app.database_url)
         ensure_storage(settings)
         queue = JobQueue(settings)
+        graph_queue = JobQueue(
+            settings,
+            queue_name=settings.graphs.queue_name,
+            enqueue_func=_enqueue_graph_job,
+        )
 
         app.state.settings = settings
         app.state.queue = queue
+        app.state.graph_queue = graph_queue
         app.state.telegram_polling = None
         app.state.telegram_task = None
 
         if settings.api.enable_telegram_polling and settings.telegram.bot_token:
-            polling = TelegramPolling(settings, queue)
+            polling = TelegramPolling(settings, queue, graph_queue)
             task = asyncio.create_task(polling.run())
             app.state.telegram_polling = polling
             app.state.telegram_task = task
@@ -70,10 +76,12 @@ def create_app() -> FastAPI:
     def health(request: Request) -> dict[str, Any]:
         settings: Settings = request.app.state.settings
         queue: JobQueue = request.app.state.queue
+        graph_queue: JobQueue = request.app.state.graph_queue
         return {
             "status": "ok",
             "redis": queue.ping(),
             "queue_length": queue.length(),
+            "graph_queue_length": graph_queue.length(),
             "cameras": list(settings.cameras.keys()),
             "events": list(settings.events.keys()),
             "temperature_rooms": list(settings.temperatures.rooms.keys()),
@@ -197,3 +205,9 @@ async def _json_or_empty(request: Request) -> dict:
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {"value": payload}
+
+
+def _enqueue_graph_job(job_id: str) -> None:
+    from server_tg_home.jobs.graph_tasks import enqueue_graph_job
+
+    enqueue_graph_job(job_id)

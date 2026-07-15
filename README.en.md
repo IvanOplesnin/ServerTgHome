@@ -8,10 +8,11 @@ Local service for Home Assistant events, RTSP camera recording and Telegram mess
 
 - `api`: FastAPI HTTP API for Home Assistant webhooks plus aiogram long polling for the Telegram bot.
 - `worker`: Dramatiq worker; receives `job_id`, loads job details from the database and performs the work.
+- `graph-worker`: dedicated Dramatiq worker for Plotly graph rendering.
 - `buffer`: keeps a short rolling RTSP buffer for each camera.
 - `retention`: APScheduler process that monitors the clip folder size, warns via Telegram and deletes old clips when the limit is reached.
 - `redis`: Dramatiq queue broker.
-- `postgres`: persistent job, status and video history database.
+- `postgres`: persistent job, status, video history and sensor history database.
 - `alembic`: database schema migrations.
 
 The queue stores only `job_id`. Job payload, status, attempts and history live in Postgres.
@@ -25,6 +26,7 @@ server_tg_home/
   database/       SQLAlchemy session, ORM models and Alembic migration runner.
   integrations/   External systems except Telegram: Home Assistant and future APIs.
   jobs/           Job creation, DB status transitions, Dramatiq queue and actors.
+  graphs/         Plotly graph rendering and PNG/HTML export.
   media/          ffmpeg recording, RTSP buffer segment handling and file storage.
   telegram/       aiogram polling and Telegram send client.
   workers/        Long-running processes: camera buffer and retention.
@@ -36,6 +38,7 @@ Rules for adding new logic:
 - HTTP endpoints belong in `api/`.
 - Telegram commands belong in `telegram/polling.py`.
 - New job types belong in `jobs/factory.py` and `jobs/processor.py`.
+- Graph rendering belongs in `graphs/`.
 - Direct calls to external services belong in `integrations/`.
 - Video, buffer and file logic belongs in `media/`.
 - Long-running loops and schedulers belong in `workers/`.
@@ -208,6 +211,7 @@ rest_command:
 
 Room temperature and humidity can be updated with a webhook request. The service stores the latest values in Postgres and `/temp` shows the last known data.
 The old `temperatures`-only payload still works; `humidities` can be added later without changing that contract.
+The same webhooks also write history to the `sensor_readings` table; graphs are built from that history.
 
 ```yaml
 automation:
@@ -258,8 +262,18 @@ The bot registers the Telegram command menu automatically, so typing `/` shows t
 - `/mute 1h`: temporarily disables automatic event notifications, `/mute off` clears the mute.
 - `/temp`: shows bedroom and living room temperature and humidity.
 - `/humidity`: shows bedroom and living room humidity.
+- `/graph bedroom 24h`: builds a temperature and humidity graph for the bedroom over 24 hours.
+- `/graph all 7d`: builds a graph for all rooms over 7 days.
+- `/graph living_room 24h humidity`: builds only living room humidity.
 - `/ac_on climate.bedroom`: calls `climate.turn_on` in Home Assistant.
 - `/status`: shows Redis, queue, database and storage status.
+
+`/graph` creates a job in the dedicated `graphs.queue_name` queue. `graph-worker` reads `sensor_readings`, renders a Plotly graph and sends to Telegram:
+
+- PNG preview for quick viewing in chat.
+- HTML file with an interactive Plotly graph for zoom/hover/toggling series.
+
+Artifacts are saved under `graphs.path`, `/data/graphs` by default. Old HTML/PNG files and sensor history are cleaned by the retention worker using `graphs.artifact_retention_days` and `graphs.history_retention_days`.
 
 ## Multiple Cameras
 
