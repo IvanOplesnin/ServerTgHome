@@ -58,6 +58,7 @@ class TemperaturesConfig(BaseModel):
         }
     )
     default_unit: str = "°C"
+    default_humidity_unit: str = "%"
     stale_after_sec: int = 7200
 
 

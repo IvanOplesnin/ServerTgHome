@@ -19,7 +19,7 @@ from server_tg_home.core.runtime_state import (
     set_notifications_armed,
 )
 from server_tg_home.core.status import build_cameras_text, build_status_text
-from server_tg_home.core.temperatures import build_temperature_text
+from server_tg_home.core.temperatures import build_humidity_text, build_temperature_text
 from server_tg_home.database.models import Video
 from server_tg_home.database.session import new_session
 from server_tg_home.jobs.factory import (
@@ -44,6 +44,7 @@ TELEGRAM_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("disarm", "Disable automatic event notifications", "/disarm"),
     ("mute", "Mute event notifications temporarily", "/mute <duration|off>"),
     ("temp", "Show room temperatures", "/temp"),
+    ("humidity", "Show room humidity", "/humidity"),
     ("ac_on", "Turn on a Home Assistant climate entity", "/ac_on <climate.entity_id>"),
     ("status", "Show service status", "/status"),
 )
@@ -193,6 +194,14 @@ class TelegramPolling:
                 return
             chat_id, message_thread_id = context
             await self._handle_temperature(chat_id, message_thread_id, _message_args(message))
+
+        @self.dispatcher.message(Command("humidity"))
+        async def command_humidity(message: Message) -> None:
+            context = await self._allowed_chat_context(message)
+            if context is None:
+                return
+            chat_id, message_thread_id = context
+            await self._handle_humidity(chat_id, message_thread_id, _message_args(message))
 
         @self.dispatcher.message(Command("status"))
         async def command_status(message: Message) -> None:
@@ -379,6 +388,11 @@ class TelegramPolling:
     async def _handle_temperature(self, chat_id: int, message_thread_id: int | None, args: list[str]) -> None:
         with new_session() as session:
             text = build_temperature_text(self.settings, session)
+        await self._reply(chat_id, text, message_thread_id=message_thread_id)
+
+    async def _handle_humidity(self, chat_id: int, message_thread_id: int | None, args: list[str]) -> None:
+        with new_session() as session:
+            text = build_humidity_text(self.settings, session)
         await self._reply(chat_id, text, message_thread_id=message_thread_id)
 
     async def _handle_status(self, chat_id: int, message_thread_id: int | None, args: list[str]) -> None:

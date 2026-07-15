@@ -206,21 +206,24 @@ rest_command:
     payload: '{"entity_id":"binary_sensor.door"}'
 ```
 
-Температуру можно обновлять webhook-запросом. Сервис сохраняет последнее значение в Postgres, а команда `/temp` показывает последние данные:
+Температуру и влажность можно обновлять webhook-запросом. Сервис сохраняет последнее значение в Postgres, а команда `/temp` показывает последние данные.
+Старый payload только с `temperatures` продолжает работать; `humidities` можно добавлять позже без изменения старого контракта.
 
 ```yaml
 automation:
-  - alias: Send room temperatures to Server Tg Home
+  - alias: Send room climate to Server Tg Home
     trigger:
       - platform: state
         entity_id:
           - sensor.bedroom_temperature
           - sensor.living_room_temperature
+          - sensor.bedroom_humidity
+          - sensor.living_room_humidity
     action:
-      - service: rest_command.server_tg_home_temperatures
+      - service: rest_command.server_tg_home_room_climate
 
 rest_command:
-  server_tg_home_temperatures:
+  server_tg_home_room_climate:
     url: "http://server-host:8080/webhooks/temperatures"
     method: POST
     headers:
@@ -232,7 +235,12 @@ rest_command:
           "bedroom": "{{ states('sensor.bedroom_temperature') }}",
           "living_room": "{{ states('sensor.living_room_temperature') }}"
         },
-        "unit": "°C"
+        "humidities": {
+          "bedroom": "{{ states('sensor.bedroom_humidity') }}",
+          "living_room": "{{ states('sensor.living_room_humidity') }}"
+        },
+        "temperature_unit": "°C",
+        "humidity_unit": "%"
       }
 ```
 
@@ -248,7 +256,8 @@ rest_command:
 - `/arm`: включает автоматические уведомления по событиям.
 - `/disarm`: выключает автоматические уведомления по событиям.
 - `/mute 1h`: временно отключает автоматические уведомления, `/mute off` снимает mute.
-- `/temp`: показывает температуру в спальне и гостиной.
+- `/temp`: показывает температуру и влажность в спальне и гостиной.
+- `/humidity`: показывает влажность в спальне и гостиной.
 - `/ac_on climate.bedroom`: вызывает `climate.turn_on` в Home Assistant.
 - `/status`: показывает статус Redis, очереди, БД и хранилища.
 

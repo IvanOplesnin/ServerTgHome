@@ -77,6 +77,7 @@ def create_app() -> FastAPI:
             "cameras": list(settings.cameras.keys()),
             "events": list(settings.events.keys()),
             "temperature_rooms": list(settings.temperatures.rooms.keys()),
+            "humidity_rooms": list(settings.temperatures.rooms.keys()),
         }
 
     @app.get("/status")
@@ -117,6 +118,8 @@ def create_app() -> FastAPI:
             return {"job_id": "", "status": "ignored"}
         return {"job_id": job_id, "status": "queued"}
 
+    @app.post("/webhooks/humidity")
+    @app.post("/webhooks/humidities")
     @app.post("/webhooks/temperature")
     @app.post("/webhooks/temperatures")
     async def receive_temperatures(
@@ -126,10 +129,16 @@ def create_app() -> FastAPI:
         settings: Settings = request.app.state.settings
         _verify_webhook_token(settings, x_webhook_token)
         payload = await _json_or_empty(request)
+        default_metric = "humidity" if request.url.path in {"/webhooks/humidity", "/webhooks/humidities"} else "temperature"
 
         try:
             with new_session() as session:
-                result = update_temperatures_from_payload(session, settings, payload)
+                result = update_temperatures_from_payload(
+                    session,
+                    settings,
+                    payload,
+                    default_metric=default_metric,
+                )
                 session.commit()
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -137,6 +146,8 @@ def create_app() -> FastAPI:
             "status": "updated",
             "updated_rooms": result.updated,
             "skipped_rooms": result.skipped,
+            "updated_humidity_rooms": result.updated_humidity,
+            "skipped_humidity_rooms": result.skipped_humidity,
         }
 
     @app.post("/jobs/record-video")

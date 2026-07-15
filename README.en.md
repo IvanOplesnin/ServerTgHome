@@ -206,21 +206,24 @@ rest_command:
     payload: '{"entity_id":"binary_sensor.door"}'
 ```
 
-Room temperatures can be updated with a webhook request. The service stores the latest values in Postgres and `/temp` shows the last known data:
+Room temperature and humidity can be updated with a webhook request. The service stores the latest values in Postgres and `/temp` shows the last known data.
+The old `temperatures`-only payload still works; `humidities` can be added later without changing that contract.
 
 ```yaml
 automation:
-  - alias: Send room temperatures to Server Tg Home
+  - alias: Send room climate to Server Tg Home
     trigger:
       - platform: state
         entity_id:
           - sensor.bedroom_temperature
           - sensor.living_room_temperature
+          - sensor.bedroom_humidity
+          - sensor.living_room_humidity
     action:
-      - service: rest_command.server_tg_home_temperatures
+      - service: rest_command.server_tg_home_room_climate
 
 rest_command:
-  server_tg_home_temperatures:
+  server_tg_home_room_climate:
     url: "http://server-host:8080/webhooks/temperatures"
     method: POST
     headers:
@@ -232,7 +235,12 @@ rest_command:
           "bedroom": "{{ states('sensor.bedroom_temperature') }}",
           "living_room": "{{ states('sensor.living_room_temperature') }}"
         },
-        "unit": "°C"
+        "humidities": {
+          "bedroom": "{{ states('sensor.bedroom_humidity') }}",
+          "living_room": "{{ states('sensor.living_room_humidity') }}"
+        },
+        "temperature_unit": "°C",
+        "humidity_unit": "%"
       }
 ```
 
@@ -248,7 +256,8 @@ The bot registers the Telegram command menu automatically, so typing `/` shows t
 - `/arm`: enables automatic event notifications.
 - `/disarm`: disables automatic event notifications.
 - `/mute 1h`: temporarily disables automatic event notifications, `/mute off` clears the mute.
-- `/temp`: shows bedroom and living room temperatures.
+- `/temp`: shows bedroom and living room temperature and humidity.
+- `/humidity`: shows bedroom and living room humidity.
 - `/ac_on climate.bedroom`: calls `climate.turn_on` in Home Assistant.
 - `/status`: shows Redis, queue, database and storage status.
 
