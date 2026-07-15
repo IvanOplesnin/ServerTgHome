@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from server_tg_home.core.config import Settings, load_settings
 from server_tg_home.core.logging import configure_logging
 from server_tg_home.core.status import build_status_text
+from server_tg_home.core.temperatures import update_temperatures_from_payload
 from server_tg_home.database.session import init_db, new_session
 from server_tg_home.jobs.factory import create_event_job, create_record_video_job
 from server_tg_home.jobs.queue import JobQueue
@@ -75,6 +76,7 @@ def create_app() -> FastAPI:
             "queue_length": queue.length(),
             "cameras": list(settings.cameras.keys()),
             "events": list(settings.events.keys()),
+            "temperature_rooms": list(settings.temperatures.rooms.keys()),
         }
 
     @app.get("/status")
@@ -114,6 +116,28 @@ def create_app() -> FastAPI:
         if job_id is None:
             return {"job_id": "", "status": "ignored"}
         return {"job_id": job_id, "status": "queued"}
+
+    @app.post("/webhooks/temperature")
+    @app.post("/webhooks/temperatures")
+    async def receive_temperatures(
+        request: Request,
+        x_webhook_token: str | None = Header(default=None, alias="X-Webhook-Token"),
+    ) -> dict[str, Any]:
+        settings: Settings = request.app.state.settings
+        _verify_webhook_token(settings, x_webhook_token)
+        payload = await _json_or_empty(request)
+
+        try:
+            with new_session() as session:
+                result = update_temperatures_from_payload(session, settings, payload)
+                session.commit()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "status": "updated",
+            "updated_rooms": result.updated,
+            "skipped_rooms": result.skipped,
+        }
 
     @app.post("/jobs/record-video")
     async def record_video(

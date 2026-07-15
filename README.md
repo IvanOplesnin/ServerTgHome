@@ -206,6 +206,36 @@ rest_command:
     payload: '{"entity_id":"binary_sensor.door"}'
 ```
 
+Температуру можно обновлять webhook-запросом. Сервис сохраняет последнее значение в Postgres, а команда `/temp` показывает последние данные:
+
+```yaml
+automation:
+  - alias: Send room temperatures to Server Tg Home
+    trigger:
+      - platform: state
+        entity_id:
+          - sensor.bedroom_temperature
+          - sensor.living_room_temperature
+    action:
+      - service: rest_command.server_tg_home_temperatures
+
+rest_command:
+  server_tg_home_temperatures:
+    url: "http://server-host:8080/webhooks/temperatures"
+    method: POST
+    headers:
+      X-Webhook-Token: "change-me"
+      Content-Type: "application/json"
+    payload: >
+      {
+        "temperatures": {
+          "bedroom": "{{ states('sensor.bedroom_temperature') }}",
+          "living_room": "{{ states('sensor.living_room_temperature') }}"
+        },
+        "unit": "°C"
+      }
+```
+
 ## Команды Telegram
 
 Бот автоматически регистрирует меню команд Telegram, поэтому при вводе `/` клиент показывает доступные команды.
@@ -218,6 +248,7 @@ rest_command:
 - `/arm`: включает автоматические уведомления по событиям.
 - `/disarm`: выключает автоматические уведомления по событиям.
 - `/mute 1h`: временно отключает автоматические уведомления, `/mute off` снимает mute.
+- `/temp`: показывает температуру в спальне и гостиной.
 - `/ac_on climate.bedroom`: вызывает `climate.turn_on` в Home Assistant.
 - `/status`: показывает статус Redis, очереди, БД и хранилища.
 

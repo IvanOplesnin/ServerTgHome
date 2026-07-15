@@ -21,6 +21,15 @@ home_assistant:
   token: "${HOME_ASSISTANT_TOKEN:-}"
   request_timeout_sec: 20
 
+temperatures:
+  default_unit: "°C"
+  stale_after_sec: 7200
+  rooms:
+    bedroom:
+      title: "Спальня"
+    living_room:
+      title: "Гостиная"
+
 storage:
   path: "/data/clips"
   max_size_mb: 10240

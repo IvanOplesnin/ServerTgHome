@@ -206,6 +206,36 @@ rest_command:
     payload: '{"entity_id":"binary_sensor.door"}'
 ```
 
+Room temperatures can be updated with a webhook request. The service stores the latest values in Postgres and `/temp` shows the last known data:
+
+```yaml
+automation:
+  - alias: Send room temperatures to Server Tg Home
+    trigger:
+      - platform: state
+        entity_id:
+          - sensor.bedroom_temperature
+          - sensor.living_room_temperature
+    action:
+      - service: rest_command.server_tg_home_temperatures
+
+rest_command:
+  server_tg_home_temperatures:
+    url: "http://server-host:8080/webhooks/temperatures"
+    method: POST
+    headers:
+      X-Webhook-Token: "change-me"
+      Content-Type: "application/json"
+    payload: >
+      {
+        "temperatures": {
+          "bedroom": "{{ states('sensor.bedroom_temperature') }}",
+          "living_room": "{{ states('sensor.living_room_temperature') }}"
+        },
+        "unit": "°C"
+      }
+```
+
 ## Telegram Commands
 
 The bot registers the Telegram command menu automatically, so typing `/` shows the available commands in the client.
@@ -218,6 +248,7 @@ The bot registers the Telegram command menu automatically, so typing `/` shows t
 - `/arm`: enables automatic event notifications.
 - `/disarm`: disables automatic event notifications.
 - `/mute 1h`: temporarily disables automatic event notifications, `/mute off` clears the mute.
+- `/temp`: shows bedroom and living room temperatures.
 - `/ac_on climate.bedroom`: calls `climate.turn_on` in Home Assistant.
 - `/status`: shows Redis, queue, database and storage status.
 

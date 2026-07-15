@@ -46,6 +46,21 @@ class HomeAssistantConfig(BaseModel):
     request_timeout_sec: int = 20
 
 
+class TemperatureRoomConfig(BaseModel):
+    title: str
+
+
+class TemperaturesConfig(BaseModel):
+    rooms: dict[str, TemperatureRoomConfig] = Field(
+        default_factory=lambda: {
+            "bedroom": TemperatureRoomConfig(title="Спальня"),
+            "living_room": TemperatureRoomConfig(title="Гостиная"),
+        }
+    )
+    default_unit: str = "°C"
+    stale_after_sec: int = 7200
+
+
 class StorageConfig(BaseModel):
     path: Path = Path("./data/clips")
     max_size_mb: int = 10_240
@@ -144,6 +159,7 @@ class Settings(BaseSettings):
     api: ApiConfig = Field(default_factory=ApiConfig)
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
     home_assistant: HomeAssistantConfig = Field(default_factory=HomeAssistantConfig)
+    temperatures: TemperaturesConfig = Field(default_factory=TemperaturesConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     buffer: BufferConfig = Field(default_factory=BufferConfig)
     cameras: dict[str, CameraConfig] = Field(default_factory=dict)
