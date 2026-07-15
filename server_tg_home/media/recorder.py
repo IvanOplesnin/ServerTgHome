@@ -67,10 +67,41 @@ def capture_snapshot(camera: CameraConfig, output_path: Path) -> None:
         *camera.ffmpeg_input_args,
         "-i",
         camera.rtsp_url,
+        "-ss",
+        "2",
+        "-map",
+        "0:v:0",
         "-frames:v",
         "1",
         "-q:v",
         "3",
+        "-update",
+        "1",
+        str(output_path),
+    ]
+    _run_ffmpeg(command, timeout_sec=45)
+
+
+def capture_snapshot_from_video(input_path: Path, output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "warning",
+        "-y",
+        "-sseof",
+        "-0.2",
+        "-i",
+        str(input_path),
+        "-map",
+        "0:v:0",
+        "-frames:v",
+        "1",
+        "-q:v",
+        "3",
+        "-update",
+        "1",
         str(output_path),
     ]
     _run_ffmpeg(command, timeout_sec=30)
@@ -212,6 +243,27 @@ def probe_duration_sec(path: Path) -> float | None:
     return duration if duration > 0 else None
 
 
+def latest_snapshot_buffer_segment(settings: Settings, camera_id: str) -> Path | None:
+    candidates: list[tuple[float, Path]] = []
+    for segment in buffer_dir(settings, camera_id).glob("*.mp4"):
+        try:
+            candidates.append((segment.stat().st_mtime, segment))
+        except FileNotFoundError:
+            continue
+    candidates.sort(key=lambda item: item[0], reverse=True)
+
+    for _, segment in candidates:
+        try:
+            if segment.stat().st_size < 8 * 1024:
+                continue
+        except FileNotFoundError:
+            continue
+        duration = probe_duration_sec(segment)
+        if duration is not None and duration >= 0.2:
+            return segment
+    return None
+
+
 def _concat_file_line(path: Path) -> str:
     escaped = str(path.resolve()).replace("'", "'\\''")
     return f"file '{escaped}'"
@@ -324,5 +376,13 @@ def record_event_clip(
 def record_snapshot(settings: Settings, camera_id: str, job_id: str) -> Path:
     camera = settings.cameras[camera_id]
     output_path = make_snapshot_path(settings, camera_id, job_id)
+    if settings.buffer.enabled and camera.buffer_enabled:
+        segment = latest_snapshot_buffer_segment(settings, camera_id)
+        if segment is not None:
+            try:
+                capture_snapshot_from_video(segment, output_path)
+                return output_path
+            except MediaError:
+                logger.exception("Failed to capture snapshot from buffer for camera %s", camera_id)
     capture_snapshot(camera, output_path)
     return output_path
