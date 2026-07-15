@@ -14,6 +14,20 @@ telegram:
   allowed_chat_ids: []
   default_chat_ids: []
   default_message_thread_id: null
+  panels:
+    door:
+      title: "Входная дверь"
+      kind: "door"
+      chat_id: null
+      message_thread_id: null
+      camera_id: "entrance"
+      video_duration_sec: 20
+    climate:
+      title: "Температура и влажность"
+      kind: "climate"
+      chat_id: null
+      message_thread_id: null
+      room_id: "all"
   request_timeout_sec: 180
 
 home_assistant:

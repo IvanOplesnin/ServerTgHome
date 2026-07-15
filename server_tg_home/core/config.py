@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
@@ -30,12 +30,23 @@ class ApiConfig(BaseModel):
     enable_telegram_polling: bool = True
 
 
+class TelegramPanelConfig(BaseModel):
+    title: str
+    kind: Literal["door", "climate"]
+    chat_id: int | None = None
+    message_thread_id: int | None = None
+    camera_id: str | None = None
+    room_id: str = "all"
+    video_duration_sec: int = 20
+
+
 class TelegramConfig(BaseModel):
     bot_token: str | None = None
     proxy_url: str | None = None
     allowed_chat_ids: list[int] = Field(default_factory=list)
     default_chat_ids: list[int] = Field(default_factory=list)
     default_message_thread_id: int | None = None
+    panels: dict[str, TelegramPanelConfig] = Field(default_factory=dict)
     request_timeout_sec: int = 180
     polling_timeout_sec: int = 30
 

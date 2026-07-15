@@ -9,10 +9,10 @@ from pathlib import Path
 from aiogram import Dispatcher, F
 from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
 from aiogram.filters import Command, CommandStart
-from aiogram.types import BotCommand, Message
+from aiogram.types import BotCommand, CallbackQuery, Message
 from sqlalchemy import select
 
-from server_tg_home.core.config import Settings
+from server_tg_home.core.config import Settings, TelegramPanelConfig
 from server_tg_home.core.runtime_state import (
     clear_notification_mute,
     mute_notifications,
@@ -30,6 +30,12 @@ from server_tg_home.jobs.factory import (
 )
 from server_tg_home.jobs.queue import JobQueue
 from server_tg_home.telegram.client import AsyncTelegramClient, TelegramApiError, chat_is_allowed
+from server_tg_home.telegram.panels import (
+    PANEL_CALLBACK_PREFIX,
+    build_panel_markup,
+    build_panel_text,
+    parse_panel_callback,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +53,7 @@ TELEGRAM_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("temp", "Show room temperatures", "/temp"),
     ("humidity", "Show room humidity", "/humidity"),
     ("graph", "Build and send sensor graph", "/graph [room|all] [window] [metric]"),
+    ("panel", "Create Telegram topic button panel", "/panel <id|all>"),
     ("ac_on", "Turn on a Home Assistant climate entity", "/ac_on <climate.entity_id>"),
     ("status", "Show service status", "/status"),
 )
@@ -73,7 +80,7 @@ class TelegramPolling:
             await self.dispatcher.start_polling(
                 self.client.bot,
                 polling_timeout=self.settings.telegram.polling_timeout_sec,
-                allowed_updates=["message"],
+                allowed_updates=["message", "callback_query"],
                 handle_signals=False,
                 close_bot_session=False,
             )
@@ -214,6 +221,14 @@ class TelegramPolling:
             chat_id, message_thread_id = context
             await self._handle_graph(chat_id, message_thread_id, _message_args(message))
 
+        @self.dispatcher.message(Command("panel"))
+        async def command_panel(message: Message) -> None:
+            context = await self._allowed_chat_context(message)
+            if context is None:
+                return
+            chat_id, message_thread_id = context
+            await self._handle_panel(chat_id, message_thread_id, _message_args(message))
+
         @self.dispatcher.message(Command("status"))
         async def command_status(message: Message) -> None:
             context = await self._allowed_chat_context(message)
@@ -221,6 +236,10 @@ class TelegramPolling:
                 return
             chat_id, message_thread_id = context
             await self._handle_status(chat_id, message_thread_id, _message_args(message))
+
+        @self.dispatcher.callback_query(F.data.startswith(f"{PANEL_CALLBACK_PREFIX}:"))
+        async def panel_callback(callback: CallbackQuery) -> None:
+            await self._handle_panel_callback(callback)
 
         @self.dispatcher.message(F.text.startswith("/"))
         async def command_unknown(message: Message) -> None:
@@ -426,6 +445,180 @@ class TelegramPolling:
             )
         await self._reply(chat_id, f"Graph job queued: {job_id}", message_thread_id=message_thread_id)
 
+    async def _handle_panel(self, chat_id: int, message_thread_id: int | None, args: list[str]) -> None:
+        if not self.settings.telegram.panels:
+            await self._reply(
+                chat_id,
+                "No telegram.panels configured.",
+                message_thread_id=message_thread_id,
+            )
+            return
+        if not args:
+            known = ", ".join(self.settings.telegram.panels.keys())
+            await self._reply(
+                chat_id,
+                f"Usage: /panel <id|all>. Available: {known}",
+                message_thread_id=message_thread_id,
+            )
+            return
+
+        panel_ids = list(self.settings.telegram.panels.keys()) if args[0].lower() == "all" else [args[0]]
+        sent: list[str] = []
+        for panel_id in panel_ids:
+            panel = self.settings.telegram.panels.get(panel_id)
+            if panel is None:
+                await self._reply(chat_id, f"Unknown panel: {panel_id}", message_thread_id=message_thread_id)
+                continue
+            target_chat_id = panel.chat_id or chat_id
+            target_thread_id = panel.message_thread_id if panel.message_thread_id is not None else message_thread_id
+            if not chat_is_allowed(self.settings.telegram, target_chat_id):
+                await self._reply(
+                    chat_id,
+                    f"Panel {panel_id} target chat {target_chat_id} is not allowed.",
+                    message_thread_id=message_thread_id,
+                )
+                continue
+            try:
+                await self.client.send_message(
+                    target_chat_id,
+                    build_panel_text(panel_id, panel),
+                    message_thread_id=target_thread_id,
+                    parse_mode="HTML",
+                    reply_markup=build_panel_markup(panel_id, panel),
+                )
+            except (TelegramApiError, TelegramAPIError, TelegramNetworkError):
+                logger.warning("Failed to send Telegram panel %s", panel_id, exc_info=True)
+                await self._reply(chat_id, f"Failed to send panel: {panel_id}", message_thread_id=message_thread_id)
+                continue
+            sent.append(panel_id)
+
+        if sent:
+            await self._reply(chat_id, f"Panels sent: {', '.join(sent)}", message_thread_id=message_thread_id)
+
+    async def _handle_panel_callback(self, callback: CallbackQuery) -> None:
+        parsed = parse_panel_callback(callback.data or "")
+        if parsed is None:
+            await _answer_callback(callback, "Unknown panel action.", alert=True)
+            return
+
+        chat_id, message_thread_id = _callback_chat_context(callback)
+        if chat_id is None:
+            await _answer_callback(callback, "Message context is unavailable.", alert=True)
+            return
+        if not chat_is_allowed(self.settings.telegram, chat_id):
+            await _answer_callback(callback, f"Chat id {chat_id} is not allowed.", alert=True)
+            return
+
+        panel_id, action = parsed
+        panel = self.settings.telegram.panels.get(panel_id)
+        if panel is None:
+            await _answer_callback(callback, f"Unknown panel: {panel_id}", alert=True)
+            return
+
+        await _answer_callback(callback, "Выполняю")
+        try:
+            await self._execute_panel_action(panel_id, panel, action, chat_id, message_thread_id)
+        except ValueError as exc:
+            await self._reply(chat_id, str(exc), message_thread_id=message_thread_id)
+
+    async def _execute_panel_action(
+        self,
+        panel_id: str,
+        panel: TelegramPanelConfig,
+        action: str,
+        chat_id: int,
+        message_thread_id: int | None,
+    ) -> None:
+        if panel.kind == "door":
+            if action == "clip":
+                await self._queue_panel_clip(panel_id, panel, chat_id, message_thread_id)
+                return
+            if action == "snapshot":
+                await self._queue_panel_snapshot(panel_id, panel, chat_id, message_thread_id)
+                return
+        if panel.kind == "climate":
+            if action == "current":
+                await self._handle_temperature(chat_id, message_thread_id, [])
+                return
+            graph_window = _panel_graph_window(action)
+            if graph_window is not None:
+                await self._queue_panel_graph(panel_id, panel, graph_window, chat_id, message_thread_id)
+                return
+        raise ValueError(f"Unsupported panel action: {action}")
+
+    async def _queue_panel_clip(
+        self,
+        panel_id: str,
+        panel: TelegramPanelConfig,
+        chat_id: int,
+        message_thread_id: int | None,
+    ) -> None:
+        camera_id = _panel_camera_id(panel_id, panel)
+        duration = max(1, min(int(panel.video_duration_sec), 300))
+        with new_session() as session:
+            job_id = create_record_video_job(
+                self.settings,
+                session,
+                self.queue,
+                source="telegram_panel",
+                camera_id=camera_id,
+                duration_sec=duration,
+                pre_event_sec=self.settings.buffer.pre_event_seconds,
+                chat_ids=[chat_id],
+                message_thread_id=message_thread_id,
+                message=f"{panel.title}: видео {duration} сек",
+            )
+        await self._reply(chat_id, f"Video job queued: {job_id}", message_thread_id=message_thread_id)
+
+    async def _queue_panel_snapshot(
+        self,
+        panel_id: str,
+        panel: TelegramPanelConfig,
+        chat_id: int,
+        message_thread_id: int | None,
+    ) -> None:
+        camera_id = _panel_camera_id(panel_id, panel)
+        with new_session() as session:
+            job_id = create_snapshot_job(
+                self.settings,
+                session,
+                self.queue,
+                source="telegram_panel",
+                camera_id=camera_id,
+                chat_ids=[chat_id],
+                message_thread_id=message_thread_id,
+                message=f"{panel.title}: фото",
+            )
+        await self._reply(chat_id, f"Snapshot job queued: {job_id}", message_thread_id=message_thread_id)
+
+    async def _queue_panel_graph(
+        self,
+        panel_id: str,
+        panel: TelegramPanelConfig,
+        window: tuple[str, int],
+        chat_id: int,
+        message_thread_id: int | None,
+    ) -> None:
+        room_id = str(panel.room_id or "all")
+        window_label, window_sec = window
+        with new_session() as session:
+            job_id = create_sensor_graph_job(
+                self.settings,
+                session,
+                self.graph_queue,
+                source="telegram_panel",
+                room_id=room_id,
+                metrics=["temperature", "humidity"],
+                window_sec=window_sec,
+                chat_ids=[chat_id],
+                message_thread_id=message_thread_id,
+            )
+        await self._reply(
+            chat_id,
+            f"Graph {window_label} job queued: {job_id}",
+            message_thread_id=message_thread_id,
+        )
+
     async def _handle_status(self, chat_id: int, message_thread_id: int | None, args: list[str]) -> None:
         with new_session() as session:
             text = build_status_text(self.settings, session, self.queue)
@@ -463,6 +656,40 @@ def _message_args(message: Message) -> list[str]:
     if len(parts) < 2:
         return []
     return parts[1].split()
+
+
+async def _answer_callback(callback: CallbackQuery, text: str, *, alert: bool = False) -> None:
+    with suppress(TelegramAPIError, TelegramNetworkError):
+        await callback.answer(text, show_alert=alert)
+
+
+def _callback_chat_context(callback: CallbackQuery) -> tuple[int | None, int | None]:
+    message = callback.message
+    chat = getattr(message, "chat", None)
+    chat_id = getattr(chat, "id", None)
+    if not isinstance(chat_id, int):
+        return None, None
+    message_thread_id = getattr(message, "message_thread_id", None)
+    if not isinstance(message_thread_id, int):
+        message_thread_id = None
+    return chat_id, message_thread_id
+
+
+def _panel_camera_id(panel_id: str, panel: TelegramPanelConfig) -> str:
+    if not panel.camera_id:
+        raise ValueError(f"Panel {panel_id} requires camera_id.")
+    return panel.camera_id
+
+
+def _panel_graph_window(action: str) -> tuple[str, int] | None:
+    windows = {
+        "graph_6h": ("6h", 6 * 3600),
+        "graph_12h": ("12h", 12 * 3600),
+        "graph_24h": ("24h", 24 * 3600),
+        "graph_7d": ("7d", 7 * 86400),
+        "graph_30d": ("30d", 30 * 86400),
+    }
+    return windows.get(action)
 
 
 def _parse_duration(value: str) -> timedelta | None:

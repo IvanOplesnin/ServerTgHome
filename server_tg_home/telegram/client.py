@@ -6,7 +6,7 @@ from pathlib import Path
 from aiogram import Bot
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
-from aiogram.types import FSInputFile
+from aiogram.types import FSInputFile, InlineKeyboardMarkup
 
 from server_tg_home.core.config import TelegramConfig
 
@@ -36,12 +36,15 @@ class AsyncTelegramClient:
         text: str,
         message_thread_id: int | None = None,
         parse_mode: str | None = None,
+        reply_markup: InlineKeyboardMarkup | None = None,
     ) -> None:
         kwargs = {"chat_id": chat_id, "text": text}
         if message_thread_id is not None:
             kwargs["message_thread_id"] = message_thread_id
         if parse_mode is not None:
             kwargs["parse_mode"] = parse_mode
+        if reply_markup is not None:
+            kwargs["reply_markup"] = reply_markup
         await self._call(self.bot.send_message(**kwargs))
 
     async def send_video(
@@ -102,6 +105,7 @@ class TelegramClient:
         text: str,
         message_thread_id: int | None = None,
         parse_mode: str | None = None,
+        reply_markup: InlineKeyboardMarkup | None = None,
     ) -> None:
         self._run(
             lambda client: client.send_message(
@@ -109,6 +113,7 @@ class TelegramClient:
                 text,
                 message_thread_id=message_thread_id,
                 parse_mode=parse_mode,
+                reply_markup=reply_markup,
             )
         )
 

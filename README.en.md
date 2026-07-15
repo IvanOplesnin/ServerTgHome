@@ -90,6 +90,29 @@ events:
 
 When `message_thread_id` is not set, the bot sends messages to a normal chat or the group's general topic. `/clip`, `/snapshot` and `/status` commands sent from a topic reply to the same topic automatically.
 
+For quick topic buttons, configure panels. This is not Telegram's system `/` command menu; it is a regular bot message with inline buttons that can be pinned in the target topic:
+
+```yaml
+telegram:
+  panels:
+    door:
+      title: "Entrance Door"
+      kind: "door"
+      chat_id: -1001234567890
+      message_thread_id: 10
+      camera_id: "entrance"
+      video_duration_sec: 20
+
+    climate:
+      title: "Temperature and Humidity"
+      kind: "climate"
+      chat_id: -1001234567890
+      message_thread_id: 20
+      room_id: "all"
+```
+
+After configuring panels, send `/panel door`, `/panel climate` or `/panel all`. The `door` panel creates buttons for a 20 second video and a snapshot. The `climate` panel creates buttons for current temperature/humidity and graphs for 6h, 12h, 24h, 7d and 30d.
+
 Start:
 
 ```bash
@@ -265,6 +288,8 @@ The bot registers the Telegram command menu automatically, so typing `/` shows t
 - `/graph bedroom 24h`: builds a temperature and humidity graph for the bedroom over 24 hours.
 - `/graph all 7d`: builds a graph for all rooms over 7 days.
 - `/graph living_room 24h humidity`: builds only living room humidity.
+- `/panel door`: sends a topic panel message with inline buttons.
+- `/panel all`: sends all configured panels.
 - `/ac_on climate.bedroom`: calls `climate.turn_on` in Home Assistant.
 - `/status`: shows Redis, queue, database and storage status.
 
