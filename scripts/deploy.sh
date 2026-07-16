@@ -50,6 +50,7 @@ Commands:
   deploy|update   Pull git changes, rebuild images when needed, and run docker compose up -d.
   restart         Recreate the docker compose stack without pulling git changes.
   status          Show docker compose status and systemd timer status.
+  doctor          Check host prerequisites and local runtime files without changing them.
   logs            Follow docker compose logs.
   ssh-key         Create an SSH deploy key for GitHub and print the public key.
   install-timer   Install a systemd timer that runs deploy periodically.
@@ -413,6 +414,71 @@ show_status() {
   fi
 }
 
+doctor_check() {
+  local label="$1"
+  shift
+  if "$@" >/dev/null 2>&1; then
+    printf '[%s] OK: %s\n' "$APP_NAME" "$label"
+  else
+    printf '[%s] WARN: %s\n' "$APP_NAME" "$label"
+  fi
+}
+
+doctor_file() {
+  local path="$1"
+  if [ -f "$path" ]; then
+    printf '[%s] OK: %s exists\n' "$APP_NAME" "$path"
+  else
+    printf '[%s] WARN: %s is missing\n' "$APP_NAME" "$path"
+  fi
+}
+
+git_worktree_clean() {
+  git -C "$APP_DIR" diff --quiet && git -C "$APP_DIR" diff --cached --quiet
+}
+
+show_doctor() {
+  log "Checking host environment"
+  if [ -f /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    log "OS: ${PRETTY_NAME:-unknown}"
+  else
+    log "OS: unknown"
+  fi
+  log "Architecture: $(uname -m)"
+  log "App dir: $APP_DIR"
+  log "User: $(id -un) (uid=$(id -u))"
+
+  doctor_check "git is installed" command -v git
+  doctor_check "curl is installed" command -v curl
+  doctor_check "docker CLI is installed" command -v docker
+  doctor_check "docker compose plugin is installed" docker compose version
+  doctor_check "current user can access Docker daemon" docker info
+
+  if [ -d "$APP_DIR/.git" ]; then
+    log "Git branch: $(git -C "$APP_DIR" branch --show-current 2>/dev/null || printf 'unknown')"
+    log "Git revision: $(git -C "$APP_DIR" rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
+    doctor_check "git working tree has no tracked changes" git_worktree_clean
+  else
+    printf '[%s] WARN: %s is not a git repository\n' "$APP_NAME" "$APP_DIR"
+  fi
+
+  doctor_file "$APP_DIR/.env"
+  doctor_file "$APP_DIR/config/config.yaml"
+  doctor_file "$APP_DIR/config/go2rtc.yaml"
+  doctor_file "$APP_DIR/docker-compose.yml"
+
+  if [ -f "$APP_DIR/docker-compose.yml" ]; then
+    doctor_check "docker compose config is valid" bash -c "cd '$APP_DIR' && docker compose config --quiet"
+    log "Compose services:"
+    compose ps 2>/dev/null || true
+  fi
+
+  log "Disk usage:"
+  df -h "$APP_DIR" 2>/dev/null || true
+}
+
 command="${1:-deploy}"
 
 case "$command" in
@@ -437,6 +503,9 @@ case "$command" in
     ;;
   status)
     show_status
+    ;;
+  doctor)
+    show_doctor
     ;;
   logs)
     compose logs -f --tail=200

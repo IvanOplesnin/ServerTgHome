@@ -4,6 +4,7 @@ app:
   queue_name: "server_tg_home_jobs"
   log_level: "INFO"
   webhook_token: "${STH_WEBHOOK_TOKEN:-}"
+  max_job_attempts: 2
 
 api:
   enable_telegram_polling: true
@@ -35,10 +36,11 @@ telegram:
       message_thread_id: null
       camera_id: "entrance"
     living:
-      chat_id: -1003868155280
-      message_thread_id: 213
+      chat_id: null
+      message_thread_id: null
       camera_id: "living"
   request_timeout_sec: 180
+  polling_timeout_sec: 30
 
 home_assistant:
   base_url: "http://homeassistant.local:8123"
