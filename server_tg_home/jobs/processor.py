@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +16,8 @@ from server_tg_home.database.session import new_session
 from server_tg_home.graphs.renderer import render_sensor_graph
 from server_tg_home.integrations.home_assistant import HomeAssistantClient
 from server_tg_home.jobs.repository import load_job, mark_done, mark_failed, mark_queued, mark_running
-from server_tg_home.media.recorder import record_event_clip, record_snapshot
+from server_tg_home.media.recorder import record_event_clip, record_snapshot, start_rtsp_clip_capture, wait_for_capture
+from server_tg_home.media.storage import make_clip_path
 from server_tg_home.telegram.client import TelegramClient
 
 logger = logging.getLogger(__name__)
@@ -223,14 +226,28 @@ class JobProcessor:
         audio_message.prepared_size_bytes = prepared.size_bytes
         session.commit()
 
-        play_camera_audio(
+        reaction_enabled = bool(_chat_ids(job.payload)) and self.telegram is not None
+        reaction_capture = AudioReactionCapture(
             self.settings,
-            camera_id=camera_id,
-            camera=camera,
-            prepared_path=prepared.path,
-            duration_sec=duration_sec,
+            camera_id,
+            job.id,
+            duration_sec,
+            enabled=reaction_enabled,
         )
+        try:
+            playback = play_camera_audio(
+                self.settings,
+                camera_id=camera_id,
+                camera=camera,
+                prepared_path=prepared.path,
+                duration_sec=duration_sec,
+                before_playback=reaction_capture.before_playback,
+            )
+        except Exception:
+            reaction_capture.abort()
+            raise
         self._notify_audio_status(job, f"Голосовое воспроизведено на камере {camera_id}.")
+        self._send_audio_reaction_clip(session, job, reaction_capture, playback.started_at)
 
     def _notify_failure(self, job: Job, error: str) -> None:
         chat_ids = _chat_ids(job.payload)
@@ -248,6 +265,71 @@ class JobProcessor:
             except Exception:
                 logger.exception("Failed to notify chat %s about job failure", chat_id)
 
+    def _send_audio_reaction_clip(
+        self,
+        session: Session,
+        job: Job,
+        reaction_capture: "AudioReactionCapture",
+        playback_started_at: datetime,
+    ) -> None:
+        if not reaction_capture.enabled:
+            return
+        chat_ids = _chat_ids(job.payload)
+        if not chat_ids or self.telegram is None:
+            return
+        camera_id = reaction_capture.camera_id
+
+        try:
+            path = reaction_capture.finish()
+            session.add(
+                Video(
+                    job_id=job.id,
+                    camera_id=camera_id,
+                    path=str(path),
+                    size_bytes=path.stat().st_size,
+                    duration_sec=reaction_capture.total_duration_sec,
+                )
+            )
+            session.commit()
+        except Exception:
+            logger.exception("Failed to record audio reaction clip for camera %s", camera_id)
+            self._notify_audio_status(
+                job,
+                f"Голосовое воспроизведено, но видео реакции с камеры {camera_id} записать не удалось.",
+            )
+            return
+
+        caption = (
+            f"Реакция камеры {camera_id} на голосовое\n"
+            f"{reaction_capture.pre_event_sec} сек до, "
+            f"{reaction_capture.post_event_sec} сек после воспроизведения"
+        )
+        message_thread_id = _message_thread_id(job.payload)
+        sent = False
+        for chat_id in chat_ids:
+            try:
+                self._require_telegram().send_video(
+                    chat_id,
+                    path,
+                    caption=caption,
+                    message_thread_id=message_thread_id,
+                )
+                sent = True
+            except Exception:
+                logger.exception("Failed to send audio reaction clip to chat %s", chat_id)
+        if not sent:
+            self._notify_audio_status(
+                job,
+                f"Видео реакции с камеры {camera_id} записано, но отправить его в Telegram не удалось.",
+            )
+            return
+        logger.info(
+            "Sent audio reaction clip for camera=%s job=%s playback_started_at=%s",
+            camera_id,
+            job.id,
+            playback_started_at.isoformat(),
+        )
+
     def _notify_audio_status(self, job: Job, text: str) -> None:
         chat_ids = _chat_ids(job.payload)
         if not chat_ids or self.telegram is None:
@@ -264,6 +346,72 @@ class JobProcessor:
         if self.telegram is None:
             raise RuntimeError("Telegram bot token is not configured")
         return self.telegram
+
+
+class AudioReactionCapture:
+    def __init__(
+        self,
+        settings: Settings,
+        camera_id: str,
+        job_id: str,
+        voice_duration_sec: int,
+        *,
+        enabled: bool,
+    ) -> None:
+        self.settings = settings
+        self.camera_id = camera_id
+        self.job_id = job_id
+        self.voice_duration_sec = max(1, int(voice_duration_sec))
+        self.pre_event_sec = max(0, int(settings.audio.reaction_pre_event_sec))
+        self.post_event_sec = max(0, int(settings.audio.reaction_post_event_sec))
+        self.total_duration_sec = max(1, self.pre_event_sec + self.voice_duration_sec + self.post_event_sec)
+        self.enabled = bool(settings.audio.reaction_clip_enabled and enabled)
+        self.path = make_clip_path(settings, camera_id, f"{job_id}_reaction")
+        self._process = None
+        self._start_error: Exception | None = None
+
+    def before_playback(self) -> None:
+        if not self.enabled:
+            return
+        camera = self.settings.cameras[self.camera_id]
+        try:
+            self._process = start_rtsp_clip_capture(
+                camera,
+                self.path,
+                self.total_duration_sec,
+                use_clip_output_args=True,
+            )
+        except Exception as exc:
+            self._start_error = exc
+            logger.exception("Failed to start audio reaction capture for camera %s", self.camera_id)
+            return
+        if self.pre_event_sec > 0:
+            time.sleep(self.pre_event_sec)
+
+    def finish(self) -> Path:
+        if self._start_error is not None:
+            raise self._start_error
+        if self._process is None:
+            raise RuntimeError("Audio reaction capture was not started")
+        wait_for_capture(
+            self._process,
+            timeout_sec=max(self.total_duration_sec * 4 + 60, 120),
+        )
+        if not self.path.exists() or self.path.stat().st_size <= 0:
+            raise RuntimeError("Audio reaction clip is empty")
+        return self.path
+
+    def abort(self) -> None:
+        if self._process is None:
+            return
+        if self._process.poll() is not None:
+            return
+        self._process.terminate()
+        try:
+            self._process.communicate(timeout=5)
+        except Exception:
+            self._process.kill()
+            self._process.communicate()
 
 
 def _chat_ids(payload: dict[str, Any]) -> list[int]:

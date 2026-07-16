@@ -149,6 +149,8 @@ cameras:
 
 Перед каждым воспроизведением `audio-worker` по умолчанию делает `/api/restart` go2rtc и ждет, пока у потока появится talkback-подключение `audio sendonly`. Это защищает от ситуации, когда камера перезагрузилась, go2rtc держит устаревшее соединение и HTTP-запрос playback возвращает успех, но звук фактически не воспроизводится. Поведение настраивается параметрами `audio.go2rtc_restart_before_playback`, `audio.go2rtc_restart_wait_sec` и `audio.go2rtc_restart_poll_sec`.
 
+Если `audio.reaction_clip_enabled` включен, перед фактическим воспроизведением `audio-worker` запускает отдельную запись видео через `ffmpeg_url`, ждет `audio.reaction_pre_event_sec` секунд, воспроизводит голосовое, дожидается еще `audio.reaction_post_event_sec` секунд записи и отправляет видео реакции в ту же тему Telegram. Такой клип не зависит от rolling buffer и остается в обычном хранилище видео, поэтому удаляется общим retention-механизмом.
+
 Запуск:
 
 ```bash

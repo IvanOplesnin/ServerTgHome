@@ -149,6 +149,8 @@ When an admin sends a voice message in a mapped topic, the bot stores the origin
 
 Before every playback, `audio-worker` runs go2rtc `/api/restart` by default and waits until the stream exposes a talkback `audio sendonly` producer. This avoids the case where a camera reboot leaves go2rtc with a stale connection: the playback HTTP request can return success while no sound is actually played. The behavior is controlled by `audio.go2rtc_restart_before_playback`, `audio.go2rtc_restart_wait_sec` and `audio.go2rtc_restart_poll_sec`.
 
+When `audio.reaction_clip_enabled` is enabled, `audio-worker` starts a separate video recording through `ffmpeg_url` before actual playback, waits `audio.reaction_pre_event_sec` seconds, plays the voice message, records for another `audio.reaction_post_event_sec` seconds, and sends the reaction clip back to the same Telegram topic. This clip does not depend on the rolling buffer and is stored in the regular video storage, so the existing retention mechanism cleans it up.
+
 Start:
 
 ```bash

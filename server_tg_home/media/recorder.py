@@ -60,6 +60,49 @@ def capture_rtsp_clip(
     _run_ffmpeg(command, timeout_sec=max(duration_sec + 60, 90))
 
 
+def start_rtsp_clip_capture(
+    camera: CameraConfig,
+    output_path: Path,
+    duration_sec: int,
+    *,
+    use_clip_output_args: bool = False,
+) -> subprocess.Popen[str]:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "warning",
+        "-y",
+        *camera.ffmpeg_input_args,
+        "-i",
+        camera_input_url(camera),
+        "-t",
+        str(duration_sec),
+        *(camera.ffmpeg_clip_output_args if use_clip_output_args else camera.ffmpeg_output_args),
+        str(output_path),
+    ]
+    return subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
+def wait_for_capture(process: subprocess.Popen[str], timeout_sec: int) -> None:
+    try:
+        _, stderr = process.communicate(timeout=timeout_sec)
+    except subprocess.TimeoutExpired as exc:
+        process.kill()
+        _, stderr = process.communicate()
+        detail = stderr[-2000:] if stderr else "ffmpeg capture timed out"
+        raise MediaError(detail) from exc
+    if process.returncode != 0:
+        detail = stderr[-2000:] if stderr else "unknown ffmpeg error"
+        raise MediaError(detail)
+
+
 def capture_snapshot(camera: CameraConfig, output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     command = [

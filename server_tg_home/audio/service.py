@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Callable
 from urllib.parse import quote
 
 import httpx
@@ -23,6 +24,11 @@ class AudioPlaybackError(RuntimeError):
 class PreparedAudio:
     path: Path
     size_bytes: int
+
+
+@dataclass(frozen=True)
+class PlaybackResult:
+    started_at: datetime
 
 
 class Go2RtcAudioClient:
@@ -49,17 +55,21 @@ class Go2RtcAudioClient:
         codec: str,
         duration_sec: int,
         grace_sec: int,
-    ) -> None:
+        before_playback: Callable[[], None] | None = None,
+    ) -> PlaybackResult:
         src = f"ffmpeg:{path}#audio={codec}#input=file"
         timeout = httpx.Timeout(float(self.timeout_sec))
         if self.restart_before_playback:
             self.restart_and_wait_for_talkback(stream_name=stream_name, codec=codec)
+        if before_playback is not None:
+            before_playback()
         with httpx.Client(timeout=timeout) as client:
             response = client.post(
                 f"{self.base_url}/api/streams",
                 params={"dst": stream_name, "src": src},
             )
             _raise_for_status(response, action="start", stream_name=stream_name)
+            started_at = datetime.now(UTC)
             try:
                 time.sleep(max(0, duration_sec) + max(0, grace_sec))
             finally:
@@ -68,6 +78,7 @@ class Go2RtcAudioClient:
                     params={"dst": stream_name, "src": ""},
                 )
                 _raise_for_status(stop_response, action="stop", stream_name=stream_name)
+        return PlaybackResult(started_at=started_at)
 
     def restart_and_wait_for_talkback(self, *, stream_name: str, codec: str) -> None:
         timeout = httpx.Timeout(float(self.timeout_sec))
@@ -168,7 +179,9 @@ def play_camera_audio(
     camera: CameraConfig,
     prepared_path: Path,
     duration_sec: int,
-) -> None:
+    *,
+    before_playback: Callable[[], None] | None = None,
+) -> PlaybackResult:
     stream_name = camera.go2rtc_stream or camera_id
     codec = camera.speaker_audio_codec or settings.audio.default_codec
     client = Go2RtcAudioClient(
@@ -179,12 +192,13 @@ def play_camera_audio(
         restart_poll_sec=settings.audio.go2rtc_restart_poll_sec,
     )
     try:
-        client.play_file(
+        return client.play_file(
             stream_name=stream_name,
             path=prepared_path,
             codec=codec,
             duration_sec=duration_sec,
             grace_sec=settings.audio.playback_grace_sec,
+            before_playback=before_playback,
         )
     except httpx.HTTPError as exc:
         raise AudioPlaybackError(f"go2rtc playback failed for {stream_name}: {exc}") from exc

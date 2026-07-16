@@ -99,6 +99,9 @@ class AudioConfig(BaseModel):
     path: Path = Path("./data/audio")
     max_duration_sec: int = 15
     retention_days: int = 14
+    reaction_clip_enabled: bool = True
+    reaction_pre_event_sec: int = 4
+    reaction_post_event_sec: int = 5
     go2rtc_base_url: str = "http://go2rtc:1984"
     go2rtc_restart_before_playback: bool = True
     go2rtc_restart_wait_sec: int = 12

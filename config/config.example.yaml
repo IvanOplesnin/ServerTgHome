@@ -72,6 +72,9 @@ audio:
   path: "/data/audio"
   max_duration_sec: 15
   retention_days: 14
+  reaction_clip_enabled: true
+  reaction_pre_event_sec: 4
+  reaction_post_event_sec: 5
   go2rtc_base_url: "http://go2rtc:1984"
   go2rtc_restart_before_playback: true
   go2rtc_restart_wait_sec: 12
