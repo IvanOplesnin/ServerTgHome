@@ -25,6 +25,7 @@ def main() -> None:
 
     subparsers.add_parser("worker", help="Run job worker")
     subparsers.add_parser("graph-worker", help="Run graph rendering worker")
+    subparsers.add_parser("audio-worker", help="Run camera audio playback worker")
     subparsers.add_parser("buffer", help="Run RTSP buffer worker")
 
     retention = subparsers.add_parser("retention", help="Run storage retention worker")
@@ -74,6 +75,19 @@ def main() -> None:
                 "--threads",
                 "1",
                 "server_tg_home.jobs.graph_tasks",
+            ],
+        )
+    elif args.command == "audio-worker":
+        init_db(settings.app.database_url)
+        os.execvp(
+            "dramatiq",
+            [
+                "dramatiq",
+                "--processes",
+                "1",
+                "--threads",
+                "1",
+                "server_tg_home.jobs.audio_tasks",
             ],
         )
     elif args.command == "buffer":

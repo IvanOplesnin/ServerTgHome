@@ -1,0 +1,23 @@
+api:
+  listen: ":1984"
+
+rtsp:
+  listen: ":8554"
+
+streams:
+  # For Tapo talkback, go2rtc uses the Tapo proprietary protocol.
+  # Use the Tapo cloud account password here, not the RTSP camera-account password.
+  # If your firmware rejects the plain password, use the uppercase MD5/SHA256 form
+  # described in the go2rtc Tapo documentation.
+  living:
+    - tapo://TAPO_CLOUD_PASSWORD@192.168.1.26?subtype=0
+    - rtsp://CAMERA_ACCOUNT:CAMERA_PASSWORD@192.168.1.26:554/stream1
+
+  # Example for the entrance camera if it is also a Tapo camera:
+  # entrance:
+  #   - tapo://TAPO_CLOUD_PASSWORD@192.168.1.10?subtype=0
+  #   - rtsp://CAMERA_ACCOUNT:CAMERA_PASSWORD@192.168.1.10:554/stream1
+
+preload:
+  # Keep the Tapo connection ready, including the microphone/talkback consumer.
+  living: "video=all&audio=all&microphone=all"

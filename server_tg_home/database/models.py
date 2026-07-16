@@ -29,6 +29,7 @@ class Job(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     videos: Mapped[list["Video"]] = relationship(back_populates="job")
+    audio_messages: Mapped[list["AudioMessage"]] = relationship(back_populates="job")
 
 
 class Video(Base):
@@ -44,6 +45,23 @@ class Video(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     job: Mapped[Job] = relationship(back_populates="videos")
+
+
+class AudioMessage(Base):
+    __tablename__ = "audio_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
+    camera_id: Mapped[str] = mapped_column(String(128), index=True)
+    source_path: Mapped[str] = mapped_column(Text)
+    prepared_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_size_bytes: Mapped[int] = mapped_column(Integer)
+    prepared_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    duration_sec: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    job: Mapped[Job] = relationship(back_populates="audio_messages")
 
 
 class AppState(Base):

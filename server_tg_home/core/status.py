@@ -7,21 +7,29 @@ from sqlalchemy.orm import Session
 
 from server_tg_home.core.config import Settings
 from server_tg_home.core.runtime_state import runtime_state_text
-from server_tg_home.database.models import Job, Video
+from server_tg_home.database.models import AudioMessage, Job, Video
 from server_tg_home.jobs.queue import JobQueue
 from server_tg_home.media.camera_health import evaluate_camera_health
-from server_tg_home.media.storage import folder_size_bytes, format_bytes, iter_video_files
+from server_tg_home.media.storage import folder_size_bytes, format_bytes, iter_audio_files, iter_video_files
 
 
-def build_status_text(settings: Settings, session: Session, queue: JobQueue) -> str:
+def build_status_text(
+    settings: Settings,
+    session: Session,
+    queue: JobQueue,
+    *,
+    extra_queues: dict[str, JobQueue] | None = None,
+) -> str:
     rows = session.execute(select(Job.status, func.count(Job.id)).group_by(Job.status)).all()
     counts = {status: count for status, count in rows}
     size = folder_size_bytes(settings.storage.path)
+    audio_size = folder_size_bytes(settings.audio.path)
     max_size = settings.storage.max_size_bytes
     percent = (size / max_size * 100) if max_size else 0
     redis_status = "ok" if queue.ping() else "unavailable"
 
     video_count = session.scalar(select(func.count(Video.id)).where(Video.deleted_at.is_(None))) or 0
+    audio_count = session.scalar(select(func.count(AudioMessage.id)).where(AudioMessage.deleted_at.is_(None))) or 0
     latest_video = session.execute(
         select(Video).where(Video.deleted_at.is_(None)).order_by(Video.created_at.desc()).limit(1)
     ).scalar_one_or_none()
@@ -33,11 +41,13 @@ def build_status_text(settings: Settings, session: Session, queue: JobQueue) -> 
         "Status",
         f"Redis: {redis_status}",
         f"Queue: {queue.length()}",
+        *_format_extra_queues(extra_queues),
         "Jobs queued/running/done/failed: "
         f"{counts.get('queued', 0)}/{counts.get('running', 0)}/"
         f"{counts.get('done', 0)}/{counts.get('failed', 0)}",
         f"Storage: {format_bytes(size)} / {format_bytes(max_size)} ({percent:.1f}%)",
         f"Videos: {video_count}",
+        f"Audio: {audio_count}, {format_bytes(audio_size)}",
     ]
     if latest_video is not None:
         lines.append(
@@ -79,9 +89,11 @@ def build_storage_text(settings: Settings) -> str:
     clips_size = folder_size_bytes(settings.storage.path)
     buffer_size = folder_size_bytes(settings.buffer.path)
     graphs_size = folder_size_bytes(settings.graphs.path)
+    audio_size = folder_size_bytes(settings.audio.path)
     max_size = settings.storage.max_size_bytes
     percent = (clips_size / max_size * 100) if max_size else 0
     video_files = iter_video_files(settings.storage.path)
+    audio_files = iter_audio_files(settings.audio.path)
     return "\n".join(
         [
             "Disk",
@@ -92,6 +104,9 @@ def build_storage_text(settings: Settings) -> str:
             f"Buffer used: {format_bytes(buffer_size)}",
             f"Graphs path: {settings.graphs.path}",
             f"Graphs used: {format_bytes(graphs_size)}",
+            f"Audio path: {settings.audio.path}",
+            f"Audio used: {format_bytes(audio_size)}",
+            f"Audio files: {len(audio_files)}",
             f"Warning threshold: {settings.storage.warning_threshold_percent}%",
             f"Cleanup target: {settings.storage.cleanup_target_percent}%",
         ]
@@ -118,3 +133,9 @@ def _format_seconds(seconds: int) -> str:
         return f"{hours}h {minutes}m"
     days, hours = divmod(hours, 24)
     return f"{days}d {hours}h"
+
+
+def _format_extra_queues(queues: dict[str, JobQueue] | None) -> list[str]:
+    if not queues:
+        return []
+    return [f"{name.capitalize()} queue: {queue.length()}" for name, queue in queues.items()]

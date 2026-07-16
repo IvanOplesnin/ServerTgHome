@@ -29,6 +29,15 @@ telegram:
       chat_id: null
       message_thread_id: null
       room_id: "all"
+  camera_topics:
+    entrance:
+      chat_id: null
+      message_thread_id: null
+      camera_id: "entrance"
+    living:
+      chat_id: -1003868155280
+      message_thread_id: 213
+      camera_id: "living"
   request_timeout_sec: 180
 
 home_assistant:
@@ -56,6 +65,17 @@ graphs:
   scale: 2
   history_retention_days: 180
   artifact_retention_days: 14
+
+audio:
+  enabled: true
+  queue_name: "server_tg_home_audio_jobs"
+  path: "/data/audio"
+  max_duration_sec: 15
+  retention_days: 14
+  go2rtc_base_url: "http://go2rtc:1984"
+  playback_grace_sec: 2
+  playback_timeout_sec: 60
+  default_codec: "pcma"
 
 camera_health:
   enabled: true
@@ -89,6 +109,9 @@ cameras:
   entrance:
     rtsp_url: "rtsp://user:password@192.168.1.10:554/stream1"
     buffer_enabled: true
+    speaker_enabled: false
+    go2rtc_stream: null
+    speaker_audio_codec: "pcma"
     default_duration_sec: 20
     ffmpeg_input_args:
       - "-rtsp_transport"
@@ -123,6 +146,16 @@ cameras:
       - "128k"
       - "-movflags"
       - "+faststart"
+  living:
+    rtsp_url: "rtsp://user:password@192.168.1.26:554/stream1"
+    buffer_enabled: true
+    speaker_enabled: true
+    go2rtc_stream: "living"
+    speaker_audio_codec: "pcma"
+    default_duration_sec: 20
+    ffmpeg_input_args:
+      - "-rtsp_transport"
+      - "tcp"
 
 events:
   door_open:

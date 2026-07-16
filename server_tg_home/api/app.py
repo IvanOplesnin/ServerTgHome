@@ -43,15 +43,21 @@ def create_app() -> FastAPI:
             queue_name=settings.graphs.queue_name,
             enqueue_func=_enqueue_graph_job,
         )
+        audio_queue = JobQueue(
+            settings,
+            queue_name=settings.audio.queue_name,
+            enqueue_func=_enqueue_audio_job,
+        )
 
         app.state.settings = settings
         app.state.queue = queue
         app.state.graph_queue = graph_queue
+        app.state.audio_queue = audio_queue
         app.state.telegram_polling = None
         app.state.telegram_task = None
 
         if settings.api.enable_telegram_polling and settings.telegram.bot_token:
-            polling = TelegramPolling(settings, queue, graph_queue)
+            polling = TelegramPolling(settings, queue, graph_queue, audio_queue)
             task = asyncio.create_task(polling.run())
             app.state.telegram_polling = polling
             app.state.telegram_task = task
@@ -77,11 +83,13 @@ def create_app() -> FastAPI:
         settings: Settings = request.app.state.settings
         queue: JobQueue = request.app.state.queue
         graph_queue: JobQueue = request.app.state.graph_queue
+        audio_queue: JobQueue = request.app.state.audio_queue
         return {
             "status": "ok",
             "redis": queue.ping(),
             "queue_length": queue.length(),
             "graph_queue_length": graph_queue.length(),
+            "audio_queue_length": audio_queue.length(),
             "cameras": list(settings.cameras.keys()),
             "events": list(settings.events.keys()),
             "temperature_rooms": list(settings.temperatures.rooms.keys()),
@@ -92,8 +100,17 @@ def create_app() -> FastAPI:
     def status(request: Request) -> dict[str, str]:
         settings: Settings = request.app.state.settings
         queue: JobQueue = request.app.state.queue
+        graph_queue: JobQueue = request.app.state.graph_queue
+        audio_queue: JobQueue = request.app.state.audio_queue
         with new_session() as session:
-            return {"status": build_status_text(settings, session, queue)}
+            return {
+                "status": build_status_text(
+                    settings,
+                    session,
+                    queue,
+                    extra_queues={"graph": graph_queue, "audio": audio_queue},
+                )
+            }
 
     @app.post("/events/{event_id}")
     async def receive_event(
@@ -211,3 +228,9 @@ def _enqueue_graph_job(job_id: str) -> None:
     from server_tg_home.jobs.graph_tasks import enqueue_graph_job
 
     enqueue_graph_job(job_id)
+
+
+def _enqueue_audio_job(job_id: str) -> None:
+    from server_tg_home.jobs.audio_tasks import enqueue_audio_job
+
+    enqueue_audio_job(job_id)

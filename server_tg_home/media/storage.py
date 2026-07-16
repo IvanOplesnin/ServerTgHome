@@ -7,6 +7,7 @@ from pathlib import Path
 from server_tg_home.core.config import Settings
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi"}
+AUDIO_EXTENSIONS = {".ogg", ".opus", ".wav", ".mp3", ".m4a", ".aac"}
 
 
 def ensure_storage(settings: Settings) -> None:
@@ -14,6 +15,7 @@ def ensure_storage(settings: Settings) -> None:
     (settings.storage.path / "tmp").mkdir(parents=True, exist_ok=True)
     settings.buffer.path.mkdir(parents=True, exist_ok=True)
     settings.graphs.path.mkdir(parents=True, exist_ok=True)
+    settings.audio.path.mkdir(parents=True, exist_ok=True)
 
 
 def make_clip_path(settings: Settings, camera_id: str, job_id: str) -> Path:
@@ -60,6 +62,16 @@ def iter_video_files(path: Path) -> list[Path]:
         if "tmp" in item.relative_to(path).parts:
             continue
         if item.is_file() and item.suffix.lower() in VIDEO_EXTENSIONS:
+            files.append(item)
+    return sorted(files, key=lambda item: item.stat().st_mtime)
+
+
+def iter_audio_files(path: Path) -> list[Path]:
+    if not path.exists():
+        return []
+    files: list[Path] = []
+    for item in path.rglob("*"):
+        if item.is_file() and item.suffix.lower() in AUDIO_EXTENSIONS:
             files.append(item)
     return sorted(files, key=lambda item: item.stat().st_mtime)
 

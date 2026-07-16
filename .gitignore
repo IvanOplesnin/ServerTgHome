@@ -10,3 +10,4 @@ dist/
 build/
 .pytest_cache/
 config/config.yaml
+config/go2rtc.yaml

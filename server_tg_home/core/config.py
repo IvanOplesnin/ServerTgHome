@@ -40,6 +40,12 @@ class TelegramPanelConfig(BaseModel):
     video_duration_sec: int = 20
 
 
+class TelegramCameraTopicConfig(BaseModel):
+    chat_id: int | None = None
+    message_thread_id: int | None = None
+    camera_id: str
+
+
 class TelegramConfig(BaseModel):
     bot_token: str | None = None
     proxy_url: str | None = None
@@ -48,6 +54,7 @@ class TelegramConfig(BaseModel):
     default_message_thread_id: int | None = None
     admin_user_ids: list[int] = Field(default_factory=list)
     panels: dict[str, TelegramPanelConfig] = Field(default_factory=dict)
+    camera_topics: dict[str, TelegramCameraTopicConfig] = Field(default_factory=dict)
     request_timeout_sec: int = 180
     polling_timeout_sec: int = 30
 
@@ -84,6 +91,18 @@ class GraphsConfig(BaseModel):
     scale: int = 2
     history_retention_days: int = 180
     artifact_retention_days: int = 14
+
+
+class AudioConfig(BaseModel):
+    enabled: bool = True
+    queue_name: str = "server_tg_home_audio_jobs"
+    path: Path = Path("./data/audio")
+    max_duration_sec: int = 15
+    retention_days: int = 14
+    go2rtc_base_url: str = "http://go2rtc:1984"
+    playback_grace_sec: int = 2
+    playback_timeout_sec: int = 60
+    default_codec: str = "pcma"
 
 
 class CameraHealthConfig(BaseModel):
@@ -132,6 +151,9 @@ class BufferConfig(BaseModel):
 class CameraConfig(BaseModel):
     rtsp_url: str
     buffer_enabled: bool = True
+    speaker_enabled: bool = False
+    go2rtc_stream: str | None = None
+    speaker_audio_codec: str | None = None
     default_duration_sec: int = 20
     ffmpeg_input_args: list[str] = Field(default_factory=lambda: ["-rtsp_transport", "tcp"])
     ffmpeg_output_args: list[str] = Field(
@@ -196,6 +218,7 @@ class Settings(BaseSettings):
     home_assistant: HomeAssistantConfig = Field(default_factory=HomeAssistantConfig)
     temperatures: TemperaturesConfig = Field(default_factory=TemperaturesConfig)
     graphs: GraphsConfig = Field(default_factory=GraphsConfig)
+    audio: AudioConfig = Field(default_factory=AudioConfig)
     camera_health: CameraHealthConfig = Field(default_factory=CameraHealthConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     buffer: BufferConfig = Field(default_factory=BufferConfig)

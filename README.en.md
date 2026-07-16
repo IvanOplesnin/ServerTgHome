@@ -9,6 +9,8 @@ Local service for Home Assistant events, RTSP camera recording and Telegram mess
 - `api`: FastAPI HTTP API for Home Assistant webhooks plus aiogram long polling for the Telegram bot.
 - `worker`: Dramatiq worker; receives `job_id`, loads job details from the database and performs the work.
 - `graph-worker`: dedicated Dramatiq worker for Plotly graph rendering.
+- `audio-worker`: dedicated Dramatiq worker for sequential voice playback on camera speakers.
+- `go2rtc`: local media gateway for Tapo two-way audio and future talkback-capable cameras.
 - `buffer`: keeps a short rolling RTSP buffer for each camera.
 - `retention`: APScheduler process that monitors the clip folder size, warns via Telegram and deletes old clips when the limit is reached.
 - `redis`: Dramatiq queue broker.
@@ -27,6 +29,7 @@ server_tg_home/
   integrations/   External systems except Telegram: Home Assistant and future APIs.
   jobs/           Job creation, DB status transitions, Dramatiq queue and actors.
   graphs/         Plotly graph rendering and PNG/HTML export.
+  audio/          Voice message preparation and audio delivery to go2rtc.
   media/          ffmpeg recording, RTSP buffer segment handling and file storage.
   telegram/       aiogram polling and Telegram send client.
   workers/        Long-running processes: camera buffer and retention.
@@ -39,6 +42,7 @@ Rules for adding new logic:
 - Telegram commands belong in `telegram/polling.py`.
 - New job types belong in `jobs/factory.py` and `jobs/processor.py`.
 - Graph rendering belongs in `graphs/`.
+- Audio preparation and playback belongs in `audio/`.
 - Direct calls to external services belong in `integrations/`.
 - Video, buffer and file logic belongs in `media/`.
 - Long-running loops and schedulers belong in `workers/`.
@@ -117,6 +121,29 @@ telegram:
 After configuring panels, send `/panel door`, `/panel climate` or `/panel all`. The `door` panel creates buttons for a 20 second video and a snapshot. The `climate` panel creates buttons for current temperature/humidity and graphs for 6h, 12h, 24h, 7d and 30d.
 
 When `telegram.admin_user_ids` is empty, every allowed chat member can use commands. When it is set, `/clip`, `/last`, `/snapshot`, `/arm`, `/disarm`, `/mute`, `/ac_on`, `/panel` and camera buttons in the `door` panel are admin-only.
+
+Voice messages for camera speaker playback require an explicit `telegram.admin_user_ids` list: when the list is empty, voice playback is disabled. Map each Telegram topic to a camera:
+
+```yaml
+telegram:
+  camera_topics:
+    living:
+      chat_id: -1001234567890
+      message_thread_id: 30
+      camera_id: "living"
+
+cameras:
+  living:
+    rtsp_url: "rtsp://user:password@192.168.1.26:554/stream1"
+    buffer_enabled: true
+    speaker_enabled: true
+    go2rtc_stream: "living"
+    speaker_audio_codec: "pcma"
+```
+
+Copy `config/go2rtc.example.yaml` to `config/go2rtc.yaml` and configure the go2rtc stream. For Tapo C200/C210, define the stream as a list: `tapo://...` is required for two-way audio, while RTSP is used for regular video/audio. Keep `microphone=all` in `preload` so go2rtc keeps the talkback connection ready. The real `config/go2rtc.yaml` is ignored by git because it contains the Tapo password.
+
+When an admin sends a voice message in a mapped topic, the bot stores the original OGG/Opus file under `audio.path`, creates a `play_camera_audio` job, `audio-worker` converts it to `PCMA/8000 mono` and sends it to go2rtc. `audio-worker` runs with one process and one thread, so messages are played strictly in queue order. Old audio files are cleaned by the retention worker using `audio.retention_days`.
 
 Start:
 

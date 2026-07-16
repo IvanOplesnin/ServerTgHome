@@ -9,6 +9,8 @@
 - `api`: FastAPI HTTP API для webhook-запросов Home Assistant и aiogram long polling для Telegram-бота.
 - `worker`: Dramatiq worker; получает `job_id`, читает детали задачи из БД и выполняет работу.
 - `graph-worker`: отдельный Dramatiq worker для построения Plotly-графиков.
+- `audio-worker`: отдельный Dramatiq worker для последовательного воспроизведения голосовых сообщений на динамиках камер.
+- `go2rtc`: локальный media-gateway для Tapo two-way audio и будущих камер с talkback.
 - `buffer`: поддерживает короткий постоянный RTSP-буфер по каждой камере.
 - `retention`: APScheduler-процесс, который следит за размером папки с видео, предупреждает через Telegram и удаляет старые ролики при переполнении.
 - `redis`: брокер очереди Dramatiq.
@@ -27,6 +29,7 @@ server_tg_home/
   integrations/  Внешние системы кроме Telegram: Home Assistant и будущие API.
   jobs/           Создание задач, статусы в БД, очередь Dramatiq и акторы.
   graphs/         Построение графиков Plotly и экспорт PNG/HTML.
+  audio/          Подготовка голосовых сообщений и отправка аудио в go2rtc.
   media/          ffmpeg-запись, RTSP-буфер и работа с файлами.
   telegram/       aiogram polling и клиент отправки сообщений в Telegram.
   workers/        Долгоживущие процессы: буфер камер и очистка хранилища.
@@ -39,6 +42,7 @@ server_tg_home/
 - Telegram-команды добавляются в `telegram/polling.py`.
 - Новые типы задач добавляются в `jobs/factory.py` и `jobs/processor.py`.
 - Рендеринг графиков добавляется в `graphs/`.
+- Подготовка и воспроизведение аудио добавляется в `audio/`.
 - Прямые вызовы внешних сервисов добавляются в `integrations/`.
 - Логика видео, буфера и файлов добавляется в `media/`.
 - Долгоживущие циклы и планировщики добавляются в `workers/`.
@@ -117,6 +121,29 @@ telegram:
 После настройки отправьте `/panel door`, `/panel climate` или `/panel all`. Панель `door` создает кнопки для 20-секундного видео и фото с камеры. Панель `climate` создает кнопки текущей температуры/влажности и графиков за 6ч, 12ч, 24ч, 7д и 30д.
 
 Если `telegram.admin_user_ids` пустой, все участники разрешенного чата могут выполнять команды. Если список заполнен, команды `/clip`, `/last`, `/snapshot`, `/arm`, `/disarm`, `/mute`, `/ac_on`, `/panel` и кнопки камеры в панели `door` доступны только этим пользователям.
+
+Голосовые сообщения для воспроизведения на камерах требуют явного списка `telegram.admin_user_ids`: если список пустой, voice playback запрещен. Привяжите тему Telegram к камере:
+
+```yaml
+telegram:
+  camera_topics:
+    living:
+      chat_id: -1001234567890
+      message_thread_id: 30
+      camera_id: "living"
+
+cameras:
+  living:
+    rtsp_url: "rtsp://user:password@192.168.1.26:554/stream1"
+    buffer_enabled: true
+    speaker_enabled: true
+    go2rtc_stream: "living"
+    speaker_audio_codec: "pcma"
+```
+
+Скопируйте `config/go2rtc.example.yaml` в `config/go2rtc.yaml` и настройте поток go2rtc. Для Tapo C200/C210 поток лучше задавать списком: `tapo://...` нужен для двустороннего звука, RTSP нужен для обычного видео/аудио. В `preload` оставьте `microphone=all`, чтобы go2rtc заранее держал talkback-подключение. Реальный `config/go2rtc.yaml` игнорируется git, потому что содержит пароль Tapo.
+
+Когда админ отправляет voice message в привязанную тему, бот сохраняет исходный OGG/Opus в `audio.path`, создает `play_camera_audio` job, `audio-worker` конвертирует файл в `PCMA/8000 mono` и передает его в go2rtc. `audio-worker` запущен одним процессом и одним потоком, поэтому сообщения воспроизводятся строго по очереди. Старые аудиофайлы очищаются retention worker по `audio.retention_days`.
 
 Запуск:
 

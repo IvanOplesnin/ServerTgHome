@@ -12,6 +12,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import BotCommand, CallbackQuery, Message
 from sqlalchemy import select
 
+from server_tg_home.audio.service import make_voice_source_path
 from server_tg_home.core.config import Settings, TelegramPanelConfig
 from server_tg_home.core.runtime_state import (
     clear_notification_mute,
@@ -24,6 +25,7 @@ from server_tg_home.core.temperatures import build_humidity_text, build_temperat
 from server_tg_home.database.models import Video
 from server_tg_home.database.session import new_session
 from server_tg_home.jobs.factory import (
+    create_camera_audio_job,
     create_home_assistant_service_job,
     create_record_video_job,
     create_sensor_graph_job,
@@ -63,10 +65,17 @@ TELEGRAM_COMMANDS: tuple[tuple[str, str, str], ...] = (
 
 
 class TelegramPolling:
-    def __init__(self, settings: Settings, queue: JobQueue, graph_queue: JobQueue) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        queue: JobQueue,
+        graph_queue: JobQueue,
+        audio_queue: JobQueue,
+    ) -> None:
         self.settings = settings
         self.queue = queue
         self.graph_queue = graph_queue
+        self.audio_queue = audio_queue
         self.client = AsyncTelegramClient(settings.telegram)
         self.dispatcher = Dispatcher()
         self._register_handlers()
@@ -262,6 +271,10 @@ class TelegramPolling:
         @self.dispatcher.callback_query(F.data.startswith(f"{PANEL_CALLBACK_PREFIX}:"))
         async def panel_callback(callback: CallbackQuery) -> None:
             await self._handle_panel_callback(callback)
+
+        @self.dispatcher.message(F.voice)
+        async def voice_message(message: Message) -> None:
+            await self._handle_voice_message(message)
 
         @self.dispatcher.message(F.text.startswith("/"))
         async def command_unknown(message: Message) -> None:
@@ -680,8 +693,117 @@ class TelegramPolling:
 
     async def _handle_status(self, chat_id: int, message_thread_id: int | None, args: list[str]) -> None:
         with new_session() as session:
-            text = build_status_text(self.settings, session, self.queue)
+            text = build_status_text(
+                self.settings,
+                session,
+                self.queue,
+                extra_queues={"graph": self.graph_queue, "audio": self.audio_queue},
+            )
         await self._reply(chat_id, text, message_thread_id=message_thread_id)
+
+    async def _handle_voice_message(self, message: Message) -> None:
+        context = await self._allowed_chat_context(message)
+        if context is None:
+            return
+        chat_id, message_thread_id = context
+        user_id = _message_user_id(message)
+        if not _user_is_explicit_admin(self.settings, user_id):
+            await self._reply(
+                chat_id,
+                f"User id {user_id or 'unknown'} is not allowed to play voice messages on camera speakers.",
+                message_thread_id=message_thread_id,
+            )
+            return
+        if not self.settings.audio.enabled:
+            await self._reply(chat_id, "Audio playback is disabled.", message_thread_id=message_thread_id)
+            return
+
+        topic_id, camera_id = _resolve_camera_topic(self.settings, chat_id, message_thread_id)
+        if camera_id is None:
+            await self._reply(
+                chat_id,
+                "This topic is not mapped to a camera speaker.",
+                message_thread_id=message_thread_id,
+            )
+            return
+
+        camera = self.settings.cameras.get(camera_id)
+        if camera is None:
+            await self._reply(chat_id, f"Unknown camera: {camera_id}", message_thread_id=message_thread_id)
+            return
+        if not camera.speaker_enabled:
+            await self._reply(
+                chat_id,
+                f"Camera speaker is not enabled: {camera_id}",
+                message_thread_id=message_thread_id,
+            )
+            return
+
+        voice = message.voice
+        if voice is None:
+            return
+        duration_sec = int(voice.duration or 0)
+        if duration_sec <= 0:
+            await self._reply(chat_id, "Voice message duration is unavailable.", message_thread_id=message_thread_id)
+            return
+        if duration_sec > self.settings.audio.max_duration_sec:
+            await self._reply(
+                chat_id,
+                f"Voice message is too long. Max: {self.settings.audio.max_duration_sec}s.",
+                message_thread_id=message_thread_id,
+            )
+            return
+
+        source_path = make_voice_source_path(
+            self.settings,
+            camera_id=camera_id,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            message_id=message.message_id,
+            file_unique_id=voice.file_unique_id,
+        )
+        try:
+            telegram_file = await self.client.bot.get_file(voice.file_id)
+            if telegram_file.file_path is None:
+                raise RuntimeError("Telegram did not return a file path.")
+            await self.client.bot.download_file(telegram_file.file_path, destination=source_path)
+        except Exception:
+            logger.exception("Failed to download Telegram voice message")
+            await self._reply(
+                chat_id,
+                "Failed to download voice message.",
+                message_thread_id=message_thread_id,
+            )
+            return
+
+        with new_session() as session:
+            try:
+                job_id = create_camera_audio_job(
+                    self.settings,
+                    session,
+                    self.audio_queue,
+                    source="telegram_voice",
+                    camera_id=camera_id,
+                    source_path=str(source_path),
+                    duration_sec=duration_sec,
+                    chat_ids=[chat_id],
+                    message_thread_id=message_thread_id,
+                    telegram_file_id=voice.file_id,
+                    telegram_file_unique_id=voice.file_unique_id,
+                    telegram_message_id=message.message_id,
+                    sender_user_id=_message_user_id(message),
+                    sender_name=_message_sender_name(message),
+                )
+            except ValueError as exc:
+                await self._reply(chat_id, str(exc), message_thread_id=message_thread_id)
+                return
+
+        suffix = f" ({topic_id})" if topic_id else ""
+        await self._reply(
+            chat_id,
+            f"Голосовое принято для камеры {camera_id}{suffix}.\nJob: {job_id}",
+            message_thread_id=message_thread_id,
+        )
 
     async def _reply(
         self,
@@ -713,6 +835,17 @@ def _message_user_id(message: Message) -> int | None:
     user = getattr(message, "from_user", None)
     user_id = getattr(user, "id", None)
     return user_id if isinstance(user_id, int) else None
+
+
+def _message_sender_name(message: Message) -> str | None:
+    user = getattr(message, "from_user", None)
+    if user is None:
+        return None
+    full_name = getattr(user, "full_name", None)
+    if isinstance(full_name, str) and full_name:
+        return full_name
+    username = getattr(user, "username", None)
+    return str(username) if username else None
 
 
 def _message_args(message: Message) -> list[str]:
@@ -750,6 +883,26 @@ def _user_is_admin(settings: Settings, user_id: int | None) -> bool:
     if not settings.telegram.admin_user_ids:
         return True
     return user_id in settings.telegram.admin_user_ids
+
+
+def _user_is_explicit_admin(settings: Settings, user_id: int | None) -> bool:
+    return bool(settings.telegram.admin_user_ids) and user_id in settings.telegram.admin_user_ids
+
+
+def _resolve_camera_topic(
+    settings: Settings,
+    chat_id: int,
+    message_thread_id: int | None,
+) -> tuple[str | None, str | None]:
+    for topic_id, topic in settings.telegram.camera_topics.items():
+        if topic.chat_id is None:
+            continue
+        if topic.chat_id != chat_id:
+            continue
+        if topic.message_thread_id != message_thread_id:
+            continue
+        return topic_id, topic.camera_id
+    return None, None
 
 
 def _panel_camera_id(panel_id: str, panel: TelegramPanelConfig) -> str:

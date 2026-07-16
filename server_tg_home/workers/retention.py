@@ -6,13 +6,19 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from apscheduler.schedulers.blocking import BlockingScheduler
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 
 from server_tg_home.core.config import Settings
-from server_tg_home.database.models import AppState, SensorReading, Video, utcnow
+from server_tg_home.database.models import AppState, AudioMessage, SensorReading, Video, utcnow
 from server_tg_home.database.session import new_session
 from server_tg_home.media.camera_health import CameraHealthStatus, evaluate_camera_health
-from server_tg_home.media.storage import ensure_storage, folder_size_bytes, format_bytes, iter_video_files
+from server_tg_home.media.storage import (
+    ensure_storage,
+    folder_size_bytes,
+    format_bytes,
+    iter_audio_files,
+    iter_video_files,
+)
 from server_tg_home.telegram.client import TelegramClient
 
 logger = logging.getLogger(__name__)
@@ -62,6 +68,7 @@ class RetentionWorker:
     def check_once(self) -> None:
         self._cleanup_sensor_history()
         self._cleanup_graph_artifacts()
+        self._cleanup_audio_artifacts()
 
         size = folder_size_bytes(self.settings.storage.path)
         max_size = self.settings.storage.max_size_bytes
@@ -177,6 +184,40 @@ class RetentionWorker:
                     path.unlink(missing_ok=True)
             except FileNotFoundError:
                 continue
+
+    def _cleanup_audio_artifacts(self) -> None:
+        retention_days = self.settings.audio.retention_days
+        if retention_days <= 0 or not self.settings.audio.path.exists():
+            return
+        cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+        deleted: list[Path] = []
+        for path in iter_audio_files(self.settings.audio.path):
+            try:
+                if datetime.fromtimestamp(path.stat().st_mtime, UTC) < cutoff:
+                    path.unlink(missing_ok=True)
+                    deleted.append(path)
+            except FileNotFoundError:
+                continue
+        if deleted:
+            self._mark_audio_deleted(deleted)
+
+    def _mark_audio_deleted(self, paths: list[Path]) -> None:
+        path_values = {str(path) for path in paths}
+        session = new_session()
+        try:
+            rows = session.execute(
+                select(AudioMessage).where(
+                    or_(
+                        AudioMessage.source_path.in_(path_values),
+                        AudioMessage.prepared_path.in_(path_values),
+                    )
+                )
+            ).scalars().all()
+            for row in rows:
+                row.deleted_at = utcnow()
+            session.commit()
+        finally:
+            session.close()
 
     def _inside_startup_grace(self) -> bool:
         grace_sec = self.settings.camera_health.startup_grace_sec

@@ -167,6 +167,56 @@ def create_sensor_graph_job(
     return job.id
 
 
+def create_camera_audio_job(
+    settings: Settings,
+    session: Session,
+    queue: JobQueue,
+    *,
+    source: str,
+    camera_id: str,
+    source_path: str,
+    duration_sec: int,
+    chat_ids: list[int] | None,
+    message_thread_id: int | None,
+    telegram_file_id: str | None = None,
+    telegram_file_unique_id: str | None = None,
+    telegram_message_id: int | None = None,
+    sender_user_id: int | None = None,
+    sender_name: str | None = None,
+) -> str:
+    if not settings.audio.enabled:
+        raise ValueError("Audio playback is disabled.")
+    camera = settings.cameras.get(camera_id)
+    if camera is None:
+        raise ValueError(f"Unknown camera: {camera_id}")
+    if not camera.speaker_enabled:
+        raise ValueError(f"Camera speaker is not enabled: {camera_id}")
+    duration_sec = max(1, int(duration_sec))
+    if duration_sec > settings.audio.max_duration_sec:
+        raise ValueError(f"Voice message is too long. Max: {settings.audio.max_duration_sec}s.")
+
+    job = create_job(
+        session,
+        queue,
+        job_type="play_camera_audio",
+        source=source,
+        payload={
+            "camera_id": camera_id,
+            "source_path": source_path,
+            "duration_sec": duration_sec,
+            "chat_ids": resolve_chat_ids(settings, chat_ids),
+            "message_thread_id": resolve_message_thread_id(settings, message_thread_id),
+            "telegram_file_id": telegram_file_id,
+            "telegram_file_unique_id": telegram_file_unique_id,
+            "telegram_message_id": telegram_message_id,
+            "sender_user_id": sender_user_id,
+            "sender_name": sender_name,
+            "event_time": iso_utc_now(),
+        },
+    )
+    return job.id
+
+
 def build_event_signature(event_id: str, event_payload: dict) -> str:
     data = {"event_id": event_id, "payload": event_payload}
     encoded = json.dumps(data, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")

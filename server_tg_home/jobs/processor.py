@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from server_tg_home.audio.service import make_prepared_audio_path, play_camera_audio, prepare_camera_audio
 from server_tg_home.core.config import Settings
-from server_tg_home.database.models import Job, Video
+from server_tg_home.database.models import AudioMessage, Job, Video
 from server_tg_home.database.session import new_session
 from server_tg_home.graphs.renderer import render_sensor_graph
 from server_tg_home.integrations.home_assistant import HomeAssistantClient
@@ -48,6 +51,8 @@ class JobProcessor:
                 self._process_send_message(job)
             elif job.type == "sensor_graph":
                 self._process_sensor_graph(session, job)
+            elif job.type == "play_camera_audio":
+                self._process_play_camera_audio(session, job)
             else:
                 raise ValueError(f"Unknown job type: {job.type}")
 
@@ -182,17 +187,78 @@ class JobProcessor:
                 message_thread_id=message_thread_id,
             )
 
+    def _process_play_camera_audio(self, session: Session, job: Job) -> None:
+        payload = job.payload
+        camera_id = str(payload["camera_id"])
+        camera = self.settings.cameras.get(camera_id)
+        if camera is None:
+            raise ValueError(f"Unknown camera: {camera_id}")
+        if not camera.speaker_enabled:
+            raise ValueError(f"Camera speaker is not enabled: {camera_id}")
+
+        source_path = Path(str(payload["source_path"]))
+        if not source_path.exists():
+            raise FileNotFoundError(f"Audio source file does not exist: {source_path}")
+        duration_sec = max(1, int(payload.get("duration_sec") or 1))
+
+        audio_message = session.execute(
+            select(AudioMessage).where(AudioMessage.job_id == job.id)
+        ).scalar_one_or_none()
+        if audio_message is None:
+            audio_message = AudioMessage(
+                job_id=job.id,
+                camera_id=camera_id,
+                source_path=str(source_path),
+                source_size_bytes=source_path.stat().st_size,
+                duration_sec=duration_sec,
+            )
+            session.add(audio_message)
+            session.commit()
+
+        self._notify_audio_status(job, f"Воспроизвожу голосовое на камере {camera_id}.")
+
+        prepared_path = make_prepared_audio_path(self.settings, camera_id=camera_id, job_id=job.id)
+        prepared = prepare_camera_audio(self.settings, source_path, prepared_path)
+        audio_message.prepared_path = str(prepared.path)
+        audio_message.prepared_size_bytes = prepared.size_bytes
+        session.commit()
+
+        play_camera_audio(
+            self.settings,
+            camera_id=camera_id,
+            camera=camera,
+            prepared_path=prepared.path,
+            duration_sec=duration_sec,
+        )
+        self._notify_audio_status(job, f"Голосовое воспроизведено на камере {camera_id}.")
+
     def _notify_failure(self, job: Job, error: str) -> None:
         chat_ids = _chat_ids(job.payload)
         if not chat_ids or self.telegram is None:
             return
-        text = f"Job failed: {job.id}\n{error[:500]}"
+        if job.type == "play_camera_audio":
+            camera_id = job.payload.get("camera_id", "unknown")
+            text = f"Не удалось воспроизвести голосовое на камере {camera_id}.\nJob: {job.id}\n{error[:500]}"
+        else:
+            text = f"Job failed: {job.id}\n{error[:500]}"
         message_thread_id = _message_thread_id(job.payload)
         for chat_id in chat_ids:
             try:
                 self.telegram.send_message(chat_id, text, message_thread_id=message_thread_id)
             except Exception:
                 logger.exception("Failed to notify chat %s about job failure", chat_id)
+
+    def _notify_audio_status(self, job: Job, text: str) -> None:
+        chat_ids = _chat_ids(job.payload)
+        if not chat_ids or self.telegram is None:
+            logger.info(text)
+            return
+        message_thread_id = _message_thread_id(job.payload)
+        for chat_id in chat_ids:
+            try:
+                self.telegram.send_message(chat_id, text, message_thread_id=message_thread_id)
+            except Exception:
+                logger.exception("Failed to send audio status to chat %s", chat_id)
 
     def _require_telegram(self) -> TelegramClient:
         if self.telegram is None:
