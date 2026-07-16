@@ -100,6 +100,9 @@ class AudioConfig(BaseModel):
     max_duration_sec: int = 15
     retention_days: int = 14
     go2rtc_base_url: str = "http://go2rtc:1984"
+    go2rtc_restart_before_playback: bool = True
+    go2rtc_restart_wait_sec: int = 12
+    go2rtc_restart_poll_sec: float = 0.5
     playback_grace_sec: int = 2
     playback_timeout_sec: int = 60
     default_codec: str = "pcma"
@@ -150,6 +153,7 @@ class BufferConfig(BaseModel):
 
 class CameraConfig(BaseModel):
     rtsp_url: str
+    ffmpeg_url: str | None = None
     buffer_enabled: bool = True
     speaker_enabled: bool = False
     go2rtc_stream: str | None = None

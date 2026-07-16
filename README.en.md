@@ -51,6 +51,7 @@ Rules for adding new logic:
 
 ```bash
 cp config/config.example.yaml config/config.yaml
+cp config/go2rtc.example.yaml config/go2rtc.yaml
 mkdir -p data
 ```
 
@@ -135,15 +136,18 @@ telegram:
 cameras:
   living:
     rtsp_url: "rtsp://user:password@192.168.1.26:554/stream1"
+    ffmpeg_url: "rtsp://go2rtc:8554/living"
     buffer_enabled: true
     speaker_enabled: true
     go2rtc_stream: "living"
     speaker_audio_codec: "pcma"
 ```
 
-Copy `config/go2rtc.example.yaml` to `config/go2rtc.yaml` and configure the go2rtc stream. For Tapo C200/C210, define the stream as a list: `tapo://...` is required for two-way audio, while RTSP is used for regular video/audio. Keep `microphone=all` in `preload` so go2rtc keeps the talkback connection ready. The real `config/go2rtc.yaml` is ignored by git because it contains the Tapo password.
+Copy `config/go2rtc.example.yaml` to `config/go2rtc.yaml` and configure the go2rtc stream. For Tapo C200/C210, define the stream as a list: `tapo://...` is required for two-way audio, while RTSP is used for regular video/audio. Keep `microphone=all` in `preload` so go2rtc keeps the talkback connection ready. For these cameras, point `ffmpeg_url` to `rtsp://go2rtc:8554/<stream>` so the buffer, clips and snapshots do not open extra direct RTSP sessions to the camera. The real `config/go2rtc.yaml` is ignored by git because it contains the Tapo password.
 
 When an admin sends a voice message in a mapped topic, the bot stores the original OGG/Opus file under `audio.path`, creates a `play_camera_audio` job, `audio-worker` converts it to `PCMA/8000 mono` and sends it to go2rtc. `audio-worker` runs with one process and one thread, so messages are played strictly in queue order. Old audio files are cleaned by the retention worker using `audio.retention_days`.
+
+Before every playback, `audio-worker` runs go2rtc `/api/restart` by default and waits until the stream exposes a talkback `audio sendonly` producer. This avoids the case where a camera reboot leaves go2rtc with a stale connection: the playback HTTP request can return success while no sound is actually played. The behavior is controlled by `audio.go2rtc_restart_before_playback`, `audio.go2rtc_restart_wait_sec` and `audio.go2rtc_restart_poll_sec`.
 
 Start:
 
@@ -187,10 +191,11 @@ cd /opt/server-tg-home
 ./scripts/deploy.sh init
 nano .env
 nano config/config.yaml
+nano config/go2rtc.yaml
 ./scripts/deploy.sh deploy
 ```
 
-`init` installs Docker Engine and the Docker Compose plugin if they are missing, then creates `.env` and `config/config.yaml`.
+`init` installs Docker Engine and the Docker Compose plugin if they are missing, then creates `.env`, `config/config.yaml` and `config/go2rtc.yaml`.
 If those files were created for the first time, the stack is not started automatically: fill Telegram token, RTSP URL, chat ids and the rest of the settings first.
 
 Manual update:
@@ -201,7 +206,7 @@ cd /opt/server-tg-home
 ```
 
 The script runs `git pull --ff-only`, rebuilds the application when code changed, and runs `docker compose up -d`.
-To also check base Docker image updates for `postgres` and `redis`, run `STH_PULL_IMAGES=1 ./scripts/deploy.sh deploy`.
+To also check base Docker image updates for `postgres`, `redis` and `go2rtc`, run `STH_PULL_IMAGES=1 ./scripts/deploy.sh deploy`.
 
 Automatic update checks with a systemd timer:
 
@@ -227,7 +232,7 @@ Backup:
 ./scripts/backup.sh
 ```
 
-By default, the backup includes Postgres, `.env` and `config/config.yaml`. Videos are not included so the archive does not become too large.
+By default, the backup includes Postgres, `.env`, `config/config.yaml` and `config/go2rtc.yaml` when it exists. Videos are not included so the archive does not become too large.
 To include the `data` directory too, run:
 
 ```bash
@@ -240,7 +245,7 @@ Restore:
 ./scripts/restore.sh backups/server-tg-home-YYYYMMDD-HHMMSS.tar.gz
 ```
 
-Before restoring, current `.env`, `config/config.yaml` and `data` are saved next to them with a `restore-before-*` suffix.
+Before restoring, current `.env`, `config/config.yaml`, `config/go2rtc.yaml` and `data` are saved next to them with a `restore-before-*` suffix.
 
 ## Home Assistant Webhook Example
 
@@ -365,6 +370,7 @@ cameras:
 
   yard:
     rtsp_url: "rtsp://user:password@192.168.1.11:554/stream1"
+    ffmpeg_url: null
     buffer_enabled: true
     default_duration_sec: 20
 

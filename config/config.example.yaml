@@ -73,6 +73,9 @@ audio:
   max_duration_sec: 15
   retention_days: 14
   go2rtc_base_url: "http://go2rtc:1984"
+  go2rtc_restart_before_playback: true
+  go2rtc_restart_wait_sec: 12
+  go2rtc_restart_poll_sec: 0.5
   playback_grace_sec: 2
   playback_timeout_sec: 60
   default_codec: "pcma"
@@ -108,6 +111,7 @@ buffer:
 cameras:
   entrance:
     rtsp_url: "rtsp://user:password@192.168.1.10:554/stream1"
+    ffmpeg_url: null
     buffer_enabled: true
     speaker_enabled: false
     go2rtc_stream: null
@@ -148,6 +152,7 @@ cameras:
       - "+faststart"
   living:
     rtsp_url: "rtsp://user:password@192.168.1.26:554/stream1"
+    ffmpeg_url: "rtsp://go2rtc:8554/living"
     buffer_enabled: true
     speaker_enabled: true
     go2rtc_stream: "living"

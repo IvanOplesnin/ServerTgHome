@@ -26,9 +26,20 @@ class PreparedAudio:
 
 
 class Go2RtcAudioClient:
-    def __init__(self, base_url: str, timeout_sec: int) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        timeout_sec: int,
+        *,
+        restart_before_playback: bool,
+        restart_wait_sec: int,
+        restart_poll_sec: float,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_sec = timeout_sec
+        self.restart_before_playback = restart_before_playback
+        self.restart_wait_sec = restart_wait_sec
+        self.restart_poll_sec = restart_poll_sec
 
     def play_file(
         self,
@@ -41,18 +52,66 @@ class Go2RtcAudioClient:
     ) -> None:
         src = f"ffmpeg:{path}#audio={codec}#input=file"
         timeout = httpx.Timeout(float(self.timeout_sec))
+        if self.restart_before_playback:
+            self.restart_and_wait_for_talkback(stream_name=stream_name, codec=codec)
         with httpx.Client(timeout=timeout) as client:
             response = client.post(
                 f"{self.base_url}/api/streams",
                 params={"dst": stream_name, "src": src},
             )
             _raise_for_status(response, action="start", stream_name=stream_name)
-            time.sleep(max(0, duration_sec) + max(0, grace_sec))
-            stop_response = client.post(
+            try:
+                time.sleep(max(0, duration_sec) + max(0, grace_sec))
+            finally:
+                stop_response = client.post(
+                    f"{self.base_url}/api/streams",
+                    params={"dst": stream_name, "src": ""},
+                )
+                _raise_for_status(stop_response, action="stop", stream_name=stream_name)
+
+    def restart_and_wait_for_talkback(self, *, stream_name: str, codec: str) -> None:
+        timeout = httpx.Timeout(float(self.timeout_sec))
+        with httpx.Client(timeout=timeout) as client:
+            response = client.post(f"{self.base_url}/api/restart")
+            _raise_for_status(response, action="restart", stream_name=stream_name)
+
+        wait_sec = max(0.0, float(self.restart_wait_sec))
+        poll_sec = max(0.1, float(self.restart_poll_sec))
+        deadline = time.monotonic() + wait_sec
+        last_state = "go2rtc restart requested"
+
+        while True:
+            try:
+                stream = self.get_stream(stream_name)
+                if _stream_has_talkback_audio(stream, codec):
+                    return
+                last_state = _describe_talkback_state(stream)
+            except Exception as exc:
+                last_state = str(exc)
+
+            now = time.monotonic()
+            if now >= deadline:
+                break
+            time.sleep(min(poll_sec, deadline - now))
+
+        raise AudioPlaybackError(
+            f"go2rtc talkback is not ready for {stream_name} after restart: {last_state}"
+        )
+
+    def get_stream(self, stream_name: str) -> dict:
+        timeout = httpx.Timeout(float(self.timeout_sec))
+        with httpx.Client(timeout=timeout) as client:
+            response = client.get(
                 f"{self.base_url}/api/streams",
-                params={"dst": stream_name, "src": ""},
+                params={"src": stream_name},
             )
-            _raise_for_status(stop_response, action="stop", stream_name=stream_name)
+            _raise_for_status(response, action="inspect", stream_name=stream_name)
+            data = response.json()
+        if isinstance(data, dict) and isinstance(data.get(stream_name), dict):
+            return data[stream_name]
+        if isinstance(data, dict):
+            return data
+        raise AudioPlaybackError(f"go2rtc inspect failed for {stream_name}: unexpected response")
 
 
 def make_voice_source_path(
@@ -115,6 +174,9 @@ def play_camera_audio(
     client = Go2RtcAudioClient(
         settings.audio.go2rtc_base_url,
         timeout_sec=settings.audio.playback_timeout_sec,
+        restart_before_playback=settings.audio.go2rtc_restart_before_playback,
+        restart_wait_sec=settings.audio.go2rtc_restart_wait_sec,
+        restart_poll_sec=settings.audio.go2rtc_restart_poll_sec,
     )
     try:
         client.play_file(
@@ -137,6 +199,54 @@ def _raise_for_status(response: httpx.Response, *, action: str, stream_name: str
         if body:
             detail = f"{detail}; response: {body[:500]}"
         raise AudioPlaybackError(detail) from exc
+
+
+def _stream_has_talkback_audio(stream: dict, codec: str) -> bool:
+    codec_label = _codec_label(codec)
+    for producer in stream.get("producers") or []:
+        if producer.get("error"):
+            continue
+        for media in producer.get("medias") or []:
+            text = str(media).upper()
+            if "AUDIO" not in text or "SENDONLY" not in text:
+                continue
+            if codec_label is None or codec_label in text:
+                return True
+    return False
+
+
+def _describe_talkback_state(stream: dict) -> str:
+    producer_descriptions: list[str] = []
+    for producer in stream.get("producers") or []:
+        medias = ", ".join(str(media) for media in producer.get("medias") or [])
+        error = producer.get("error")
+        remote = producer.get("remote_addr") or "unknown remote"
+        if error:
+            producer_descriptions.append(f"{remote}: error={error}")
+        elif medias:
+            producer_descriptions.append(f"{remote}: {medias}")
+        else:
+            producer_descriptions.append(f"{remote}: no medias")
+    if producer_descriptions:
+        return "; ".join(producer_descriptions)
+    return "no producers"
+
+
+def _codec_label(codec: str) -> str | None:
+    normalized = codec.strip().lower()
+    if not normalized:
+        return None
+    aliases = {
+        "alaw": "PCMA",
+        "g711a": "PCMA",
+        "pcm_alaw": "PCMA",
+        "pcma": "PCMA",
+        "mulaw": "PCMU",
+        "g711u": "PCMU",
+        "pcm_mulaw": "PCMU",
+        "pcmu": "PCMU",
+    }
+    return aliases.get(normalized, normalized.upper())
 
 
 def _run(command: list[str], timeout_sec: int) -> None:

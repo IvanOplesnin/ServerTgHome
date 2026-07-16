@@ -51,6 +51,7 @@ server_tg_home/
 
 ```bash
 cp config/config.example.yaml config/config.yaml
+cp config/go2rtc.example.yaml config/go2rtc.yaml
 mkdir -p data
 ```
 
@@ -135,15 +136,18 @@ telegram:
 cameras:
   living:
     rtsp_url: "rtsp://user:password@192.168.1.26:554/stream1"
+    ffmpeg_url: "rtsp://go2rtc:8554/living"
     buffer_enabled: true
     speaker_enabled: true
     go2rtc_stream: "living"
     speaker_audio_codec: "pcma"
 ```
 
-Скопируйте `config/go2rtc.example.yaml` в `config/go2rtc.yaml` и настройте поток go2rtc. Для Tapo C200/C210 поток лучше задавать списком: `tapo://...` нужен для двустороннего звука, RTSP нужен для обычного видео/аудио. В `preload` оставьте `microphone=all`, чтобы go2rtc заранее держал talkback-подключение. Реальный `config/go2rtc.yaml` игнорируется git, потому что содержит пароль Tapo.
+Скопируйте `config/go2rtc.example.yaml` в `config/go2rtc.yaml` и настройте поток go2rtc. Для Tapo C200/C210 поток лучше задавать списком: `tapo://...` нужен для двустороннего звука, RTSP нужен для обычного видео/аудио. В `preload` оставьте `microphone=all`, чтобы go2rtc заранее держал talkback-подключение. Для таких камер `ffmpeg_url` лучше направлять на `rtsp://go2rtc:8554/<stream>`, чтобы буфер, клипы и snapshot не создавали лишние прямые RTSP-сессии к камере. Реальный `config/go2rtc.yaml` игнорируется git, потому что содержит пароль Tapo.
 
 Когда админ отправляет voice message в привязанную тему, бот сохраняет исходный OGG/Opus в `audio.path`, создает `play_camera_audio` job, `audio-worker` конвертирует файл в `PCMA/8000 mono` и передает его в go2rtc. `audio-worker` запущен одним процессом и одним потоком, поэтому сообщения воспроизводятся строго по очереди. Старые аудиофайлы очищаются retention worker по `audio.retention_days`.
+
+Перед каждым воспроизведением `audio-worker` по умолчанию делает `/api/restart` go2rtc и ждет, пока у потока появится talkback-подключение `audio sendonly`. Это защищает от ситуации, когда камера перезагрузилась, go2rtc держит устаревшее соединение и HTTP-запрос playback возвращает успех, но звук фактически не воспроизводится. Поведение настраивается параметрами `audio.go2rtc_restart_before_playback`, `audio.go2rtc_restart_wait_sec` и `audio.go2rtc_restart_poll_sec`.
 
 Запуск:
 
@@ -187,10 +191,11 @@ cd /opt/server-tg-home
 ./scripts/deploy.sh init
 nano .env
 nano config/config.yaml
+nano config/go2rtc.yaml
 ./scripts/deploy.sh deploy
 ```
 
-`init` установит Docker Engine и Docker Compose plugin, если они отсутствуют, создаст `.env` и `config/config.yaml`.
+`init` установит Docker Engine и Docker Compose plugin, если они отсутствуют, создаст `.env`, `config/config.yaml` и `config/go2rtc.yaml`.
 Если эти файлы были созданы впервые, сервис не стартует автоматически: сначала нужно заполнить Telegram token, RTSP URL, chat ids и остальные настройки.
 
 Ручное обновление:
@@ -201,7 +206,7 @@ cd /opt/server-tg-home
 ```
 
 Скрипт делает `git pull --ff-only`, пересобирает приложение при изменениях и запускает `docker compose up -d`.
-Чтобы дополнительно проверить обновления базовых Docker-образов `postgres` и `redis`, запустите `STH_PULL_IMAGES=1 ./scripts/deploy.sh deploy`.
+Чтобы дополнительно проверить обновления базовых Docker-образов `postgres`, `redis` и `go2rtc`, запустите `STH_PULL_IMAGES=1 ./scripts/deploy.sh deploy`.
 
 Автоматическая проверка обновлений через systemd timer:
 
@@ -227,7 +232,7 @@ Timer по умолчанию проверяет обновления кажды
 ./scripts/backup.sh
 ```
 
-По умолчанию в backup попадают Postgres, `.env` и `config/config.yaml`. Видео не включаются, чтобы архив не стал слишком большим.
+По умолчанию в backup попадают Postgres, `.env`, `config/config.yaml` и `config/go2rtc.yaml`, если он есть. Видео не включаются, чтобы архив не стал слишком большим.
 Если нужно сохранить и папку `data`, запустите:
 
 ```bash
@@ -240,7 +245,7 @@ STH_BACKUP_INCLUDE_DATA=1 ./scripts/backup.sh
 ./scripts/restore.sh backups/server-tg-home-YYYYMMDD-HHMMSS.tar.gz
 ```
 
-Перед восстановлением текущие `.env`, `config/config.yaml` и `data` сохраняются рядом с суффиксом `restore-before-*`.
+Перед восстановлением текущие `.env`, `config/config.yaml`, `config/go2rtc.yaml` и `data` сохраняются рядом с суффиксом `restore-before-*`.
 
 ## Пример webhook из Home Assistant
 
@@ -365,6 +370,7 @@ cameras:
 
   yard:
     rtsp_url: "rtsp://user:password@192.168.1.11:554/stream1"
+    ffmpeg_url: null
     buffer_enabled: true
     default_duration_sec: 20
 

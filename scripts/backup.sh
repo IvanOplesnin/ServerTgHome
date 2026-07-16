@@ -30,6 +30,7 @@ Creates a backup archive with:
   - Postgres dump
   - .env
   - config/config.yaml
+  - config/go2rtc.yaml if present
 
 Environment:
   STH_BACKUP_DIR=$BACKUP_DIR
@@ -73,6 +74,9 @@ log "Preparing backup in $tmp_dir"
 mkdir -p "$tmp_dir/config"
 cp "$APP_DIR/.env" "$tmp_dir/.env"
 cp "$APP_DIR/config/config.yaml" "$tmp_dir/config/config.yaml"
+if [ -f "$APP_DIR/config/go2rtc.yaml" ]; then
+  cp "$APP_DIR/config/go2rtc.yaml" "$tmp_dir/config/go2rtc.yaml"
+fi
 
 log "Dumping Postgres"
 compose up -d postgres >/dev/null

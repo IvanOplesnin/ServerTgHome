@@ -61,8 +61,8 @@ Environment:
   STH_BRANCH=$DEFAULT_BRANCH
   STH_UPDATE_INTERVAL=$DEFAULT_TIMER_INTERVAL
   STH_FORCE=1                    Force rebuild/recreate on deploy.
-  STH_PULL_IMAGES=1              Pull postgres/redis images even when git has no updates.
-  STH_START_WITH_NEW_CONFIG=1    Start even if .env/config.yaml were just created.
+  STH_PULL_IMAGES=1              Pull postgres/redis/go2rtc images even when git has no updates.
+  STH_START_WITH_NEW_CONFIG=1    Start even if .env/config.yaml/go2rtc.yaml were just created.
 EOF
 }
 
@@ -213,6 +213,12 @@ ensure_runtime_files() {
     log "Created config/config.yaml from config.example.yaml"
   fi
 
+  if [ ! -f "$APP_DIR/config/go2rtc.yaml" ]; then
+    cp "$APP_DIR/config/go2rtc.example.yaml" "$APP_DIR/config/go2rtc.yaml"
+    RUNTIME_FILES_CREATED=1
+    log "Created config/go2rtc.yaml from go2rtc.example.yaml"
+  fi
+
   if [ ! -f "$APP_DIR/.env" ]; then
     local postgres_password webhook_token
     postgres_password="$(random_secret)"
@@ -235,7 +241,7 @@ EOF
 stack_running() {
   local services
   services="$(compose ps --status running --services 2>/dev/null || true)"
-  for service in postgres redis api worker graph-worker buffer retention; do
+  for service in postgres redis go2rtc api worker graph-worker audio-worker buffer retention; do
     if ! printf '%s\n' "$services" | grep -qx "$service"; then
       return 1
     fi
@@ -250,6 +256,7 @@ deploy_stack() {
 Created initial runtime files. Edit them before starting the stack:
   $APP_DIR/.env
   $APP_DIR/config/config.yaml
+  $APP_DIR/config/go2rtc.yaml
 
 Then run:
   $APP_DIR/scripts/deploy.sh deploy
@@ -261,7 +268,7 @@ EOF
   if [ "$FORCE" != "1" ] && [ "$REPO_CHANGED" = "0" ] && stack_running; then
     log "Stack is already running and git has no updates"
     if [ "$PULL_IMAGES" = "1" ]; then
-      compose pull postgres redis
+      compose pull postgres redis go2rtc
     fi
     compose up -d --remove-orphans
     check_health
@@ -269,7 +276,7 @@ EOF
   fi
 
   log "Pulling service images"
-  compose pull postgres redis
+  compose pull postgres redis go2rtc
   log "Building application images"
   compose build --pull
   log "Starting stack"
@@ -413,7 +420,7 @@ case "$command" in
     ensure_dependencies
     clone_or_update_repo
     ensure_runtime_files
-    log "Initial setup completed. Edit .env and config/config.yaml, then run deploy."
+    log "Initial setup completed. Edit .env, config/config.yaml and config/go2rtc.yaml, then run deploy."
     ;;
   deploy|update)
     ensure_dependencies

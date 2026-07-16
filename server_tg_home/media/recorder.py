@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 BufferSegment = tuple[datetime, datetime, Path]
 
 
+def camera_input_url(camera: CameraConfig) -> str:
+    return camera.ffmpeg_url or camera.rtsp_url
+
+
 def _run_ffmpeg(command: list[str], timeout_sec: int) -> None:
     result = subprocess.run(
         command,
@@ -47,7 +51,7 @@ def capture_rtsp_clip(
         "-y",
         *camera.ffmpeg_input_args,
         "-i",
-        camera.rtsp_url,
+        camera_input_url(camera),
         "-t",
         str(duration_sec),
         *camera.ffmpeg_output_args,
@@ -66,7 +70,7 @@ def capture_snapshot(camera: CameraConfig, output_path: Path) -> None:
         "-y",
         *camera.ffmpeg_input_args,
         "-i",
-        camera.rtsp_url,
+        camera_input_url(camera),
         "-ss",
         "2",
         "-map",
@@ -124,7 +128,7 @@ def build_buffer_command(settings: Settings, camera_id: str, camera: CameraConfi
         "-y",
         *camera.ffmpeg_input_args,
         "-i",
-        camera.rtsp_url,
+        camera_input_url(camera),
         *camera.ffmpeg_output_args,
         "-f",
         "segment",

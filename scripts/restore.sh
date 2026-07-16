@@ -28,6 +28,7 @@ Restores:
   - Postgres dump
   - .env
   - config/config.yaml
+  - config/go2rtc.yaml if it exists in the archive
   - data/ only if it exists in the archive
 EOF
 }
@@ -70,15 +71,19 @@ tar -xzf "$backup_path" -C "$tmp_dir"
 timestamp="$(date -u +%Y%m%d-%H%M%S)"
 
 log "Stopping application services"
-compose stop api worker graph-worker buffer retention >/dev/null 2>&1 || true
+compose stop api worker graph-worker audio-worker buffer retention go2rtc >/dev/null 2>&1 || true
 
 log "Saving current runtime files before restore"
 [ ! -f "$APP_DIR/.env" ] || cp "$APP_DIR/.env" "$APP_DIR/.env.restore-before-$timestamp"
 mkdir -p "$APP_DIR/config"
 [ ! -f "$APP_DIR/config/config.yaml" ] || cp "$APP_DIR/config/config.yaml" "$APP_DIR/config/config.yaml.restore-before-$timestamp"
+[ ! -f "$APP_DIR/config/go2rtc.yaml" ] || cp "$APP_DIR/config/go2rtc.yaml" "$APP_DIR/config/go2rtc.yaml.restore-before-$timestamp"
 
 cp "$tmp_dir/.env" "$APP_DIR/.env"
 cp "$tmp_dir/config/config.yaml" "$APP_DIR/config/config.yaml"
+if [ -f "$tmp_dir/config/go2rtc.yaml" ]; then
+  cp "$tmp_dir/config/go2rtc.yaml" "$APP_DIR/config/go2rtc.yaml"
+fi
 chmod 600 "$APP_DIR/.env"
 
 if [ -d "$tmp_dir/data" ]; then
