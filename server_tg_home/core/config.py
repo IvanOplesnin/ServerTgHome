@@ -46,6 +46,7 @@ class TelegramConfig(BaseModel):
     allowed_chat_ids: list[int] = Field(default_factory=list)
     default_chat_ids: list[int] = Field(default_factory=list)
     default_message_thread_id: int | None = None
+    admin_user_ids: list[int] = Field(default_factory=list)
     panels: dict[str, TelegramPanelConfig] = Field(default_factory=dict)
     request_timeout_sec: int = 180
     polling_timeout_sec: int = 30
@@ -83,6 +84,16 @@ class GraphsConfig(BaseModel):
     scale: int = 2
     history_retention_days: int = 180
     artifact_retention_days: int = 14
+
+
+class CameraHealthConfig(BaseModel):
+    enabled: bool = True
+    poll_sec: int = 60
+    stale_after_sec: int | None = None
+    startup_grace_sec: int = 120
+    notify_recovery: bool = True
+    notify_chat_ids: list[int] = Field(default_factory=list)
+    notify_message_thread_id: int | None = None
 
 
 class StorageConfig(BaseModel):
@@ -185,6 +196,7 @@ class Settings(BaseSettings):
     home_assistant: HomeAssistantConfig = Field(default_factory=HomeAssistantConfig)
     temperatures: TemperaturesConfig = Field(default_factory=TemperaturesConfig)
     graphs: GraphsConfig = Field(default_factory=GraphsConfig)
+    camera_health: CameraHealthConfig = Field(default_factory=CameraHealthConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     buffer: BufferConfig = Field(default_factory=BufferConfig)
     cameras: dict[str, CameraConfig] = Field(default_factory=dict)

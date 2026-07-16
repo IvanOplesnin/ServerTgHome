@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from pathlib import Path
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -10,6 +9,7 @@ from server_tg_home.core.config import Settings
 from server_tg_home.core.runtime_state import runtime_state_text
 from server_tg_home.database.models import Job, Video
 from server_tg_home.jobs.queue import JobQueue
+from server_tg_home.media.camera_health import evaluate_camera_health
 from server_tg_home.media.storage import folder_size_bytes, format_bytes, iter_video_files
 
 
@@ -60,48 +60,41 @@ def build_cameras_text(settings: Settings) -> str:
         return "Cameras: none configured"
 
     lines = ["Cameras"]
-    for camera_id, camera in settings.cameras.items():
-        if not settings.buffer.enabled or not camera.buffer_enabled:
-            lines.append(f"- {camera_id}: buffer disabled")
+    for status in evaluate_camera_health(settings):
+        if status.state == "skipped":
+            lines.append(f"- {status.camera_id}: skipped, {status.reason}")
             continue
-
-        buffer_path = settings.buffer.path / camera_id
-        segments = sorted(buffer_path.glob("*.mp4")) if buffer_path.exists() else []
-        if not segments:
-            lines.append(f"- {camera_id}: no buffer segments")
+        if status.last_segment_age_sec is None:
+            lines.append(f"- {status.camera_id}: {status.state}, {status.reason}")
             continue
-
-        latest = _latest_existing_file(segments)
-        if latest is None:
-            lines.append(f"- {camera_id}: no readable buffer segments")
-            continue
-
-        try:
-            latest_time = datetime.fromtimestamp(latest.stat().st_mtime, UTC)
-        except FileNotFoundError:
-            lines.append(f"- {camera_id}: no readable buffer segments")
-            continue
-        age_sec = max(0, int((datetime.now(UTC) - latest_time).total_seconds()))
-        stale_after_sec = max(settings.buffer.keep_seconds, settings.buffer.segment_seconds * 3, 30)
-        state = "ok" if age_sec <= stale_after_sec else "stale"
-        buffer_size = folder_size_bytes(buffer_path)
         lines.append(
-            f"- {camera_id}: {state}, last segment {_format_seconds(age_sec)} ago, "
-            f"{len(segments)} segments, {format_bytes(buffer_size)}"
+            f"- {status.camera_id}: {status.state}, "
+            f"last segment {_format_seconds(status.last_segment_age_sec)} ago, "
+            f"{status.segment_count} segments, {format_bytes(status.buffer_size_bytes)}"
         )
     return "\n".join(lines)
 
 
 def build_storage_text(settings: Settings) -> str:
-    size = folder_size_bytes(settings.storage.path)
+    clips_size = folder_size_bytes(settings.storage.path)
+    buffer_size = folder_size_bytes(settings.buffer.path)
+    graphs_size = folder_size_bytes(settings.graphs.path)
     max_size = settings.storage.max_size_bytes
-    percent = (size / max_size * 100) if max_size else 0
+    percent = (clips_size / max_size * 100) if max_size else 0
     video_files = iter_video_files(settings.storage.path)
-    return (
-        "Storage\n"
-        f"Path: {settings.storage.path}\n"
-        f"Used: {format_bytes(size)} / {format_bytes(max_size)} ({percent:.1f}%)\n"
-        f"Video files: {len(video_files)}"
+    return "\n".join(
+        [
+            "Disk",
+            f"Clips path: {settings.storage.path}",
+            f"Clips used: {format_bytes(clips_size)} / {format_bytes(max_size)} ({percent:.1f}%)",
+            f"Video files: {len(video_files)}",
+            f"Buffer path: {settings.buffer.path}",
+            f"Buffer used: {format_bytes(buffer_size)}",
+            f"Graphs path: {settings.graphs.path}",
+            f"Graphs used: {format_bytes(graphs_size)}",
+            f"Warning threshold: {settings.storage.warning_threshold_percent}%",
+            f"Cleanup target: {settings.storage.cleanup_target_percent}%",
+        ]
     )
 
 
@@ -125,17 +118,3 @@ def _format_seconds(seconds: int) -> str:
         return f"{hours}h {minutes}m"
     days, hours = divmod(hours, 24)
     return f"{days}d {hours}h"
-
-
-def _latest_existing_file(paths: list[Path]) -> Path | None:
-    latest_path: Path | None = None
-    latest_mtime = 0.0
-    for path in paths:
-        try:
-            mtime = path.stat().st_mtime
-        except FileNotFoundError:
-            continue
-        if latest_path is None or mtime > latest_mtime:
-            latest_path = path
-            latest_mtime = mtime
-    return latest_path

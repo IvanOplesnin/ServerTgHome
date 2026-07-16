@@ -64,6 +64,7 @@ POSTGRES_PASSWORD=change-this-password
 
 Fill `telegram.allowed_chat_ids` and `telegram.default_chat_ids` in `config/config.yaml`.
 Send `/start` to the bot to see your `chat_id`.
+`/start` also shows `User id`; add trusted users to `telegram.admin_user_ids` if you want to restrict dangerous actions.
 
 If the bot should post to a specific group topic, add it to a supergroup with topics enabled and send `/start` in the target topic.
 The bot will show `Chat id` and `Topic message_thread_id`. To send all default events to that topic, set:
@@ -75,6 +76,8 @@ telegram:
   default_chat_ids:
     - -1001234567890
   default_message_thread_id: 123
+  admin_user_ids:
+    - 123456789
 ```
 
 You can override the topic for a specific event:
@@ -112,6 +115,8 @@ telegram:
 ```
 
 After configuring panels, send `/panel door`, `/panel climate` or `/panel all`. The `door` panel creates buttons for a 20 second video and a snapshot. The `climate` panel creates buttons for current temperature/humidity and graphs for 6h, 12h, 24h, 7d and 30d.
+
+When `telegram.admin_user_ids` is empty, every allowed chat member can use commands. When it is set, `/clip`, `/last`, `/snapshot`, `/arm`, `/disarm`, `/mute`, `/ac_on`, `/panel` and camera buttons in the `door` panel are admin-only.
 
 Start:
 
@@ -285,9 +290,11 @@ The bot registers the Telegram command menu automatically, so typing `/` shows t
 - `/mute 1h`: temporarily disables automatic event notifications, `/mute off` clears the mute.
 - `/temp`: shows bedroom and living room temperature and humidity.
 - `/humidity`: shows bedroom and living room humidity.
+- `/analytics all 24h`: shows min, average, max and latest sensor values for the selected period.
 - `/graph bedroom 24h`: builds a temperature and humidity graph for the bedroom over 24 hours.
 - `/graph all 7d`: builds a graph for all rooms over 7 days.
 - `/graph living_room 24h humidity`: builds only living room humidity.
+- `/disk`: shows clip, buffer and graph folder usage.
 - `/panel door`: sends a topic panel message with inline buttons.
 - `/panel all`: sends all configured panels.
 - `/ac_on climate.bedroom`: calls `climate.turn_on` in Home Assistant.
@@ -299,6 +306,24 @@ The bot registers the Telegram command menu automatically, so typing `/` shows t
 - HTML file with an interactive Plotly graph for zoom/hover/toggling series.
 
 Artifacts are saved under `graphs.path`, `/data/graphs` by default. Old HTML/PNG files and sensor history are cleaned by the retention worker using `graphs.artifact_retention_days` and `graphs.history_retention_days`.
+
+## Camera Healthcheck
+
+`retention` also checks camera health. The primary signal is RTSP buffer freshness. If a camera stops writing new segments, the service sends a Telegram notification; it can also notify when the camera recovers.
+
+```yaml
+camera_health:
+  enabled: true
+  poll_sec: 60
+  stale_after_sec: null
+  startup_grace_sec: 120
+  notify_recovery: true
+  notify_chat_ids:
+    - -1001234567890
+  notify_message_thread_id: 123
+```
+
+When `stale_after_sec` is not set, the threshold is derived from the buffer settings: the maximum of `buffer.keep_seconds`, `buffer.segment_seconds * 3` and 30 seconds. `startup_grace_sec` avoids false alerts immediately after container restarts before the first buffer segments appear.
 
 ## Multiple Cameras
 

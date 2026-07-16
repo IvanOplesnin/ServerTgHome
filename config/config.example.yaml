@@ -14,6 +14,7 @@ telegram:
   allowed_chat_ids: []
   default_chat_ids: []
   default_message_thread_id: null
+  admin_user_ids: []
   panels:
     door:
       title: "Входная дверь"
@@ -55,6 +56,15 @@ graphs:
   scale: 2
   history_retention_days: 180
   artifact_retention_days: 14
+
+camera_health:
+  enabled: true
+  poll_sec: 60
+  stale_after_sec: null
+  startup_grace_sec: 120
+  notify_recovery: true
+  notify_chat_ids: []
+  notify_message_thread_id: null
 
 storage:
   path: "/data/clips"

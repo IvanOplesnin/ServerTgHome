@@ -18,7 +18,8 @@ from server_tg_home.core.runtime_state import (
     mute_notifications,
     set_notifications_armed,
 )
-from server_tg_home.core.status import build_cameras_text, build_status_text
+from server_tg_home.core.sensor_analytics import build_sensor_analytics_text
+from server_tg_home.core.status import build_cameras_text, build_status_text, build_storage_text
 from server_tg_home.core.temperatures import build_humidity_text, build_temperature_text
 from server_tg_home.database.models import Video
 from server_tg_home.database.session import new_session
@@ -52,7 +53,9 @@ TELEGRAM_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("mute", "Mute event notifications temporarily", "/mute <duration|off>"),
     ("temp", "Show room temperatures", "/temp"),
     ("humidity", "Show room humidity", "/humidity"),
+    ("analytics", "Show sensor analytics", "/analytics [room|all] [window]"),
     ("graph", "Build and send sensor graph", "/graph [room|all] [window] [metric]"),
+    ("disk", "Show storage usage", "/disk"),
     ("panel", "Create Telegram topic button panel", "/panel <id|all>"),
     ("ac_on", "Turn on a Home Assistant climate entity", "/ac_on <climate.entity_id>"),
     ("status", "Show service status", "/status"),
@@ -110,10 +113,13 @@ class TelegramPolling:
             if chat_id is None:
                 return
             message_thread_id = _message_thread_id(message)
+            user_id = _message_user_id(message)
             text = (
                 f"Chat id: {chat_id}\n"
                 "Add it to telegram.allowed_chat_ids and telegram.default_chat_ids."
             )
+            if user_id is not None:
+                text += f"\nUser id: {user_id}\nUse it in telegram.admin_user_ids for admin-only actions."
             if message_thread_id is not None:
                 text += (
                     f"\nTopic message_thread_id: {message_thread_id}\n"
@@ -135,7 +141,7 @@ class TelegramPolling:
 
         @self.dispatcher.message(Command("clip"))
         async def command_clip(message: Message) -> None:
-            context = await self._allowed_chat_context(message)
+            context = await self._admin_chat_context(message, "record camera clips")
             if context is None:
                 return
             chat_id, message_thread_id = context
@@ -151,7 +157,7 @@ class TelegramPolling:
 
         @self.dispatcher.message(Command("last"))
         async def command_last(message: Message) -> None:
-            context = await self._allowed_chat_context(message)
+            context = await self._admin_chat_context(message, "send saved camera videos")
             if context is None:
                 return
             chat_id, message_thread_id = context
@@ -159,7 +165,7 @@ class TelegramPolling:
 
         @self.dispatcher.message(Command("snapshot"))
         async def command_snapshot(message: Message) -> None:
-            context = await self._allowed_chat_context(message)
+            context = await self._admin_chat_context(message, "capture camera snapshots")
             if context is None:
                 return
             chat_id, message_thread_id = context
@@ -167,7 +173,7 @@ class TelegramPolling:
 
         @self.dispatcher.message(Command("arm"))
         async def command_arm(message: Message) -> None:
-            context = await self._allowed_chat_context(message)
+            context = await self._admin_chat_context(message, "change notification state")
             if context is None:
                 return
             chat_id, message_thread_id = context
@@ -175,7 +181,7 @@ class TelegramPolling:
 
         @self.dispatcher.message(Command("disarm"))
         async def command_disarm(message: Message) -> None:
-            context = await self._allowed_chat_context(message)
+            context = await self._admin_chat_context(message, "change notification state")
             if context is None:
                 return
             chat_id, message_thread_id = context
@@ -183,7 +189,7 @@ class TelegramPolling:
 
         @self.dispatcher.message(Command("mute"))
         async def command_mute(message: Message) -> None:
-            context = await self._allowed_chat_context(message)
+            context = await self._admin_chat_context(message, "mute notifications")
             if context is None:
                 return
             chat_id, message_thread_id = context
@@ -191,7 +197,7 @@ class TelegramPolling:
 
         @self.dispatcher.message(Command("ac_on"))
         async def command_ac_on(message: Message) -> None:
-            context = await self._allowed_chat_context(message)
+            context = await self._admin_chat_context(message, "control Home Assistant")
             if context is None:
                 return
             chat_id, message_thread_id = context
@@ -213,6 +219,14 @@ class TelegramPolling:
             chat_id, message_thread_id = context
             await self._handle_humidity(chat_id, message_thread_id, _message_args(message))
 
+        @self.dispatcher.message(Command("analytics"))
+        async def command_analytics(message: Message) -> None:
+            context = await self._allowed_chat_context(message)
+            if context is None:
+                return
+            chat_id, message_thread_id = context
+            await self._handle_analytics(chat_id, message_thread_id, _message_args(message))
+
         @self.dispatcher.message(Command("graph"))
         async def command_graph(message: Message) -> None:
             context = await self._allowed_chat_context(message)
@@ -221,9 +235,17 @@ class TelegramPolling:
             chat_id, message_thread_id = context
             await self._handle_graph(chat_id, message_thread_id, _message_args(message))
 
+        @self.dispatcher.message(Command("disk"))
+        async def command_disk(message: Message) -> None:
+            context = await self._allowed_chat_context(message)
+            if context is None:
+                return
+            chat_id, message_thread_id = context
+            await self._handle_disk(chat_id, message_thread_id, _message_args(message))
+
         @self.dispatcher.message(Command("panel"))
         async def command_panel(message: Message) -> None:
-            context = await self._allowed_chat_context(message)
+            context = await self._admin_chat_context(message, "create Telegram panels")
             if context is None:
                 return
             chat_id, message_thread_id = context
@@ -262,6 +284,21 @@ class TelegramPolling:
             )
             return None
         return chat_id, message_thread_id
+
+    async def _admin_chat_context(self, message: Message, action: str) -> tuple[int, int | None] | None:
+        context = await self._allowed_chat_context(message)
+        if context is None:
+            return None
+        chat_id, message_thread_id = context
+        user_id = _message_user_id(message)
+        if not _user_is_admin(self.settings, user_id):
+            await self._reply(
+                chat_id,
+                f"User id {user_id or 'unknown'} is not allowed to {action}.",
+                message_thread_id=message_thread_id,
+            )
+            return None
+        return context
 
     async def _handle_help(self, chat_id: int, message_thread_id: int | None, args: list[str]) -> None:
         lines = ["Commands:"]
@@ -425,6 +462,22 @@ class TelegramPolling:
             text = build_humidity_text(self.settings, session, html=True)
         await self._reply(chat_id, text, message_thread_id=message_thread_id, parse_mode="HTML")
 
+    async def _handle_analytics(self, chat_id: int, message_thread_id: int | None, args: list[str]) -> None:
+        parsed = _parse_analytics_args(self.settings, args)
+        if isinstance(parsed, str):
+            await self._reply(chat_id, parsed, message_thread_id=message_thread_id)
+            return
+        room_id, window = parsed
+        with new_session() as session:
+            text = build_sensor_analytics_text(
+                self.settings,
+                session,
+                room_id=room_id,
+                window=window,
+                html=True,
+            )
+        await self._reply(chat_id, text, message_thread_id=message_thread_id, parse_mode="HTML")
+
     async def _handle_graph(self, chat_id: int, message_thread_id: int | None, args: list[str]) -> None:
         parsed = _parse_graph_args(self.settings, args)
         if isinstance(parsed, str):
@@ -444,6 +497,9 @@ class TelegramPolling:
                 message_thread_id=message_thread_id,
             )
         await self._reply(chat_id, f"Graph job queued: {job_id}", message_thread_id=message_thread_id)
+
+    async def _handle_disk(self, chat_id: int, message_thread_id: int | None, args: list[str]) -> None:
+        await self._reply(chat_id, build_storage_text(self.settings), message_thread_id=message_thread_id)
 
     async def _handle_panel(self, chat_id: int, message_thread_id: int | None, args: list[str]) -> None:
         if not self.settings.telegram.panels:
@@ -513,6 +569,9 @@ class TelegramPolling:
         panel = self.settings.telegram.panels.get(panel_id)
         if panel is None:
             await _answer_callback(callback, f"Unknown panel: {panel_id}", alert=True)
+            return
+        if panel.kind == "door" and not _user_is_admin(self.settings, _callback_user_id(callback)):
+            await _answer_callback(callback, "This camera action is admin-only.", alert=True)
             return
 
         await _answer_callback(callback, "Выполняю")
@@ -650,6 +709,12 @@ def _message_thread_id(message: Message) -> int | None:
     return message_thread_id if isinstance(message_thread_id, int) else None
 
 
+def _message_user_id(message: Message) -> int | None:
+    user = getattr(message, "from_user", None)
+    user_id = getattr(user, "id", None)
+    return user_id if isinstance(user_id, int) else None
+
+
 def _message_args(message: Message) -> list[str]:
     text = message.text or ""
     parts = text.strip().split(maxsplit=1)
@@ -675,6 +740,18 @@ def _callback_chat_context(callback: CallbackQuery) -> tuple[int | None, int | N
     return chat_id, message_thread_id
 
 
+def _callback_user_id(callback: CallbackQuery) -> int | None:
+    user = getattr(callback, "from_user", None)
+    user_id = getattr(user, "id", None)
+    return user_id if isinstance(user_id, int) else None
+
+
+def _user_is_admin(settings: Settings, user_id: int | None) -> bool:
+    if not settings.telegram.admin_user_ids:
+        return True
+    return user_id in settings.telegram.admin_user_ids
+
+
 def _panel_camera_id(panel_id: str, panel: TelegramPanelConfig) -> str:
     if not panel.camera_id:
         raise ValueError(f"Panel {panel_id} requires camera_id.")
@@ -690,6 +767,35 @@ def _panel_graph_window(action: str) -> tuple[str, int] | None:
         "graph_30d": ("30d", 30 * 86400),
     }
     return windows.get(action)
+
+
+def _parse_analytics_args(settings: Settings, args: list[str]) -> tuple[str, timedelta] | str:
+    remaining = list(args)
+    room_id = "all"
+    if remaining:
+        candidate = remaining[0].lower()
+        if candidate == "all" or candidate in settings.temperatures.rooms:
+            room_id = candidate
+            remaining.pop(0)
+        elif _parse_duration(candidate) is None:
+            known = ", ".join(["all", *settings.temperatures.rooms.keys()])
+            return f"Unknown room: {candidate}. Available: {known}"
+
+    default_window = _parse_duration(settings.graphs.default_window) or timedelta(hours=24)
+    window = default_window
+    if remaining:
+        candidate_window = _parse_duration(remaining[0])
+        if candidate_window is None:
+            return "Usage: /analytics [room|all] [window]"
+        window = candidate_window
+        remaining.pop(0)
+
+    max_window = _parse_duration(settings.graphs.max_window) or timedelta(days=30)
+    if window > max_window:
+        return f"Window is too large. Max: {settings.graphs.max_window}."
+    if remaining:
+        return "Usage: /analytics [room|all] [window]"
+    return room_id, window
 
 
 def _parse_duration(value: str) -> timedelta | None:
