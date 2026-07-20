@@ -387,6 +387,22 @@ def record_event_clip(
     target_end = target_start + timedelta(seconds=duration_sec)
 
     if use_buffer:
+        precheck_timeout_sec = max(1, min(max(pre_event_sec * 2, settings.buffer.segment_seconds + 2), 15))
+        pre_segments = wait_for_buffer_window(
+            settings,
+            camera_id,
+            target_start,
+            target_start,
+            precheck_timeout_sec,
+        )
+        if not pre_segments:
+            logger.warning(
+                "Pre-event buffer unavailable for camera %s; falling back to immediate live capture",
+                camera_id,
+            )
+            use_buffer = False
+
+    if use_buffer:
         wait_timeout_sec = int(max((target_end - datetime.now(UTC)).total_seconds(), 0) + 30)
         logger.info(
             "Waiting for buffer window camera=%s start=%s end=%s timeout=%ss",
