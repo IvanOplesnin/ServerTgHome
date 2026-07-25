@@ -24,6 +24,15 @@ telegram:
       message_thread_id: null
       camera_id: "entrance"
       video_duration_sec: 20
+      record_duration_sec: 600
+    living:
+      title: "Гостиная"
+      kind: "camera"
+      chat_id: null
+      message_thread_id: null
+      camera_id: "living"
+      video_duration_sec: 20
+      record_duration_sec: 600
     climate:
       title: "Температура и влажность"
       kind: "climate"

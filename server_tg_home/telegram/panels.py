@@ -11,7 +11,7 @@ PANEL_CALLBACK_PREFIX = "sth:p"
 
 def build_panel_text(panel_id: str, panel: TelegramPanelConfig) -> str:
     title = escape(panel.title)
-    if panel.kind == "door":
+    if panel.kind in {"door", "camera"}:
         return f"<b>{title}</b>\n\nБыстрые действия камеры."
     if panel.kind == "climate":
         return f"<b>{title}</b>\n\nТемпература, влажность и графики."
@@ -19,17 +19,27 @@ def build_panel_text(panel_id: str, panel: TelegramPanelConfig) -> str:
 
 
 def build_panel_markup(panel_id: str, panel: TelegramPanelConfig) -> InlineKeyboardMarkup:
-    if panel.kind == "door":
+    if panel.kind in {"door", "camera"}:
         return InlineKeyboardMarkup(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text=f"Видео {panel.video_duration_sec} сек",
+                        text=f"Клип {panel.video_duration_sec} сек",
                         callback_data=_callback_data(panel_id, "clip"),
                     ),
                     InlineKeyboardButton(
                         text="Фото",
                         callback_data=_callback_data(panel_id, "snapshot"),
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text=f"Запись {panel.record_duration_sec // 60} мин",
+                        callback_data=_callback_data(panel_id, "record"),
+                    ),
+                    InlineKeyboardButton(
+                        text="Список видео",
+                        callback_data=_callback_data(panel_id, "videos"),
                     ),
                 ],
             ]

@@ -427,7 +427,18 @@ telegram:
       message_thread_id: 10
       camera_id: "entrance"
       video_duration_sec: 20
+      record_duration_sec: 600
+    living:
+      title: "Living room"
+      kind: "camera"
+      chat_id: -1001234567890
+      message_thread_id: 30
+      camera_id: "living"
+      video_duration_sec: 20
+      record_duration_sec: 600
 ```
+
+`kind: door` and `kind: camera` panels show camera action buttons: clip, snapshot, record to disk and saved-video list. `video_duration_sec` controls the clip that is sent immediately, while `record_duration_sec` controls the SSD recording duration.
 
 Run `/panel door` and pin the bot message in the topic.
 

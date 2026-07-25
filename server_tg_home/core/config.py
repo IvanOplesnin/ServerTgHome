@@ -32,12 +32,13 @@ class ApiConfig(BaseModel):
 
 class TelegramPanelConfig(BaseModel):
     title: str
-    kind: Literal["door", "climate"]
+    kind: Literal["door", "camera", "climate"]
     chat_id: int | None = None
     message_thread_id: int | None = None
     camera_id: str | None = None
     room_id: str = "all"
     video_duration_sec: int = 20
+    record_duration_sec: int = 600
 
 
 class TelegramCameraTopicConfig(BaseModel):

@@ -362,6 +362,16 @@ telegram:
       message_thread_id: 10
       camera_id: "entrance"
       video_duration_sec: 20
+      record_duration_sec: 600
+
+    living:
+      title: "Гостиная"
+      kind: "camera"
+      chat_id: -1001234567890
+      message_thread_id: 30
+      camera_id: "living"
+      video_duration_sec: 20
+      record_duration_sec: 600
 
     climate:
       title: "Температура и влажность"
@@ -371,8 +381,11 @@ telegram:
       room_id: "all"
 ```
 
-- `kind: door`: кнопки видео и snapshot.
+- `kind: door`: кнопки клипа, snapshot, записи на диск и списка видео для входной двери.
+- `kind: camera`: такие же кнопки камеры для обычных комнат/топиков.
 - `kind: climate`: кнопки текущих датчиков и графиков 6ч/12ч/24ч/7д/30д.
+- `video_duration_sec`: длительность клипа, который сразу отправляется в Telegram.
+- `record_duration_sec`: длительность записи на диск/SSD без автоматической отправки, например `600` для 10 минут.
 - Команды: `/panel door`, `/panel climate`, `/panel all`.
 
 ### Telegram Camera Topics
@@ -697,6 +710,15 @@ telegram:
       message_thread_id: 10
       camera_id: "entrance"
       video_duration_sec: 20
+      record_duration_sec: 600
+    living:
+      title: "Гостиная"
+      kind: "camera"
+      chat_id: -1001234567890
+      message_thread_id: 30
+      camera_id: "living"
+      video_duration_sec: 20
+      record_duration_sec: 600
     climate:
       title: "Температура и влажность"
       kind: "climate"

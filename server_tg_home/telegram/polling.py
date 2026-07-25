@@ -732,7 +732,7 @@ class TelegramPolling:
         if panel is None:
             await _answer_callback(callback, f"Unknown panel: {panel_id}", alert=True)
             return
-        if panel.kind == "door" and not _user_is_admin(self.settings, _callback_user_id(callback)):
+        if panel.kind in {"door", "camera"} and not _user_is_admin(self.settings, _callback_user_id(callback)):
             await _answer_callback(callback, "This camera action is admin-only.", alert=True)
             return
 
@@ -750,12 +750,18 @@ class TelegramPolling:
         chat_id: int,
         message_thread_id: int | None,
     ) -> None:
-        if panel.kind == "door":
+        if panel.kind in {"door", "camera"}:
             if action == "clip":
                 await self._queue_panel_clip(panel_id, panel, chat_id, message_thread_id)
                 return
             if action == "snapshot":
                 await self._queue_panel_snapshot(panel_id, panel, chat_id, message_thread_id)
+                return
+            if action == "record":
+                await self._queue_panel_record(panel_id, panel, chat_id, message_thread_id)
+                return
+            if action == "videos":
+                await self._send_panel_videos(panel_id, panel, chat_id, message_thread_id)
                 return
         if panel.kind == "climate":
             if action == "current":
@@ -811,6 +817,44 @@ class TelegramPolling:
                 message=f"{panel.title}: фото",
             )
         await self._reply(chat_id, f"Snapshot job queued: {job_id}", message_thread_id=message_thread_id)
+
+    async def _queue_panel_record(
+        self,
+        panel_id: str,
+        panel: TelegramPanelConfig,
+        chat_id: int,
+        message_thread_id: int | None,
+    ) -> None:
+        camera_id = _panel_camera_id(panel_id, panel)
+        duration = max(1, min(int(panel.record_duration_sec), RECORD_MAX_DURATION_SEC))
+        with new_session() as session:
+            job_id = create_record_video_file_job(
+                self.settings,
+                session,
+                self.queue,
+                source="telegram_panel_record",
+                camera_id=camera_id,
+                duration_sec=duration,
+                pre_event_sec=0,
+                chat_ids=[chat_id],
+                message_thread_id=message_thread_id,
+                message=f"{panel.title}: запись на SSD {duration} сек",
+            )
+        await self._reply(
+            chat_id,
+            f"Запись запущена: камера {camera_id}, {duration} сек.\nJob: {job_id}",
+            message_thread_id=message_thread_id,
+        )
+
+    async def _send_panel_videos(
+        self,
+        panel_id: str,
+        panel: TelegramPanelConfig,
+        chat_id: int,
+        message_thread_id: int | None,
+    ) -> None:
+        camera_id = _panel_camera_id(panel_id, panel)
+        await self._handle_videos(chat_id, message_thread_id, [camera_id])
 
     async def _queue_panel_graph(
         self,
