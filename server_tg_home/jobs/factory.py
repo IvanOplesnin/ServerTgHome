@@ -68,6 +68,40 @@ def create_record_video_job(
     return job.id
 
 
+def create_record_video_file_job(
+    settings: Settings,
+    session: Session,
+    queue: JobQueue,
+    *,
+    source: str,
+    camera_id: str,
+    duration_sec: int,
+    pre_event_sec: int | None,
+    chat_ids: list[int] | None,
+    message_thread_id: int | None,
+    message: str | None,
+) -> str:
+    if camera_id not in settings.cameras:
+        raise ValueError(f"Unknown camera: {camera_id}")
+    payload = {
+        "camera_id": camera_id,
+        "duration_sec": duration_sec,
+        "pre_event_sec": pre_event_sec if pre_event_sec is not None else 0,
+        "chat_ids": resolve_chat_ids(settings, chat_ids),
+        "message_thread_id": resolve_message_thread_id(settings, message_thread_id),
+        "message": message,
+        "event_time": iso_utc_now(),
+    }
+    job = create_job(
+        session,
+        queue,
+        job_type="record_video_file",
+        source=source,
+        payload=payload,
+    )
+    return job.id
+
+
 def create_event_job(
     settings: Settings,
     session: Session,

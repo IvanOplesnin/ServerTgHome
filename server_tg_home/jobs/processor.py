@@ -17,7 +17,7 @@ from server_tg_home.graphs.renderer import render_sensor_graph
 from server_tg_home.integrations.home_assistant import HomeAssistantClient
 from server_tg_home.jobs.repository import load_job, mark_done, mark_failed, mark_queued, mark_running
 from server_tg_home.media.recorder import record_event_clip, record_snapshot, start_rtsp_clip_capture, wait_for_capture
-from server_tg_home.media.storage import make_clip_path
+from server_tg_home.media.storage import format_bytes, make_clip_path
 from server_tg_home.telegram.client import TelegramClient
 
 logger = logging.getLogger(__name__)
@@ -46,6 +46,8 @@ class JobProcessor:
 
             if job.type == "record_and_send_video":
                 self._process_record_video(session, job)
+            elif job.type == "record_video_file":
+                self._process_record_video_file(session, job)
             elif job.type == "snapshot_and_send":
                 self._process_snapshot(job)
             elif job.type == "home_assistant_service":
@@ -122,6 +124,30 @@ class JobProcessor:
                 caption=caption,
                 message_thread_id=message_thread_id,
             )
+
+    def _process_record_video_file(self, session: Session, job: Job) -> None:
+        payload = job.payload
+        camera_id = str(payload["camera_id"])
+        duration_sec = int(payload.get("duration_sec") or self.settings.cameras[camera_id].default_duration_sec)
+        pre_event_sec = int(payload.get("pre_event_sec") or 0)
+        path = record_event_clip(
+            self.settings,
+            camera_id=camera_id,
+            job_id=job.id,
+            duration_sec=duration_sec,
+            pre_event_sec=pre_event_sec,
+            event_time_value=payload.get("event_time"),
+        )
+        video = Video(
+            job_id=job.id,
+            camera_id=camera_id,
+            path=str(path),
+            size_bytes=path.stat().st_size,
+            duration_sec=duration_sec,
+        )
+        session.add(video)
+        session.commit()
+        self._notify_record_saved(job, video)
 
     def _process_snapshot(self, job: Job) -> None:
         payload = job.payload
@@ -264,6 +290,25 @@ class JobProcessor:
                 self.telegram.send_message(chat_id, text, message_thread_id=message_thread_id)
             except Exception:
                 logger.exception("Failed to notify chat %s about job failure", chat_id)
+
+    def _notify_record_saved(self, job: Job, video: Video) -> None:
+        chat_ids = _chat_ids(job.payload)
+        if not chat_ids or self.telegram is None:
+            return
+        message_thread_id = _message_thread_id(job.payload)
+        text = (
+            "Запись сохранена на SSD.\n"
+            f"Видео: #{video.id}\n"
+            f"Камера: {video.camera_id}\n"
+            f"Длительность: {video.duration_sec or '-'} сек\n"
+            f"Размер: {format_bytes(video.size_bytes)}\n\n"
+            f"Открыть список: /videos {video.camera_id}"
+        )
+        for chat_id in chat_ids:
+            try:
+                self.telegram.send_message(chat_id, text, message_thread_id=message_thread_id)
+            except Exception:
+                logger.exception("Failed to notify chat %s about saved video %s", chat_id, video.id)
 
     def _send_audio_reaction_clip(
         self,

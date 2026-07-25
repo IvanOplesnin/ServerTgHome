@@ -10,7 +10,9 @@ It runs in a LAN, receives webhooks, records camera clips, sends messages/photos
 - Receive Home Assistant HTTP webhooks.
 - Record and send a camera clip when an event happens, for example when a door opens.
 - Keep a short rolling camera buffer so clips can include seconds before the event.
-- Record clips from Telegram with `/clip`.
+- Record and send clips from Telegram with `/clip`.
+- Record camera video to local disk/SSD with `/record`.
+- Show saved videos with `/videos` and send a selected file using inline buttons.
 - Capture snapshots with `/snapshot`.
 - Send the latest saved video with `/last`.
 - Work with Telegram group chats and forum topics.
@@ -550,6 +552,8 @@ The bot registers Telegram commands, so the `/` menu shows them.
 - `/help`: command list.
 - `/cameras`: camera and buffer status.
 - `/clip entrance 20`: record and send a 20 second clip.
+- `/record entrance 120`: record a 120 second video to disk without automatic upload.
+- `/videos entrance`: show the latest 20 saved camera videos with upload buttons.
 - `/last entrance`: send the latest saved clip.
 - `/snapshot entrance`: capture one frame.
 - `/arm`: enable automatic event notifications.
@@ -568,7 +572,16 @@ The bot registers Telegram commands, so the `/` menu shows them.
 - `/ac_on climate.bedroom`: call `climate.turn_on` in Home Assistant.
 - `/status`: Redis, queues, DB and file status.
 
-Admin-only actions: `/clip`, `/last`, `/snapshot`, `/arm`, `/disarm`, `/mute`, `/ac_on`, `/panel`, door panel camera buttons and voice playback.
+Inside a Telegram topic mapped to a camera through `telegram.camera_topics`, `/record` and `/videos` can omit `camera_id`:
+
+```text
+/record 120
+/videos
+```
+
+`/record` stores the file under `storage.path/<camera>/<date>/` and creates a row in `videos`. When the worker finishes, it sends a text notification with the video id. `/videos` lists the latest 20 existing files from the database and sends the selected video to the current chat/topic when an inline button is clicked.
+
+Admin-only actions: `/clip`, `/record`, `/videos`, `/last`, `/snapshot`, `/arm`, `/disarm`, `/mute`, `/ac_on`, `/panel`, door panel camera buttons, saved-video upload buttons and voice playback.
 
 ## Graphs
 

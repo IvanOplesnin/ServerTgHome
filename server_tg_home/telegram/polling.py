@@ -3,13 +3,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import suppress
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from aiogram import Dispatcher, F
 from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
 from aiogram.filters import Command, CommandStart
-from aiogram.types import BotCommand, CallbackQuery, Message
+from aiogram.types import BotCommand, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import select
 
 from server_tg_home.audio.service import make_voice_source_path
@@ -27,11 +27,13 @@ from server_tg_home.database.session import new_session
 from server_tg_home.jobs.factory import (
     create_camera_audio_job,
     create_home_assistant_service_job,
+    create_record_video_file_job,
     create_record_video_job,
     create_sensor_graph_job,
     create_snapshot_job,
 )
 from server_tg_home.jobs.queue import JobQueue
+from server_tg_home.media.storage import format_bytes
 from server_tg_home.telegram.client import AsyncTelegramClient, TelegramApiError, chat_is_allowed
 from server_tg_home.telegram.panels import (
     PANEL_CALLBACK_PREFIX,
@@ -42,12 +44,19 @@ from server_tg_home.telegram.panels import (
 
 logger = logging.getLogger(__name__)
 
+VIDEO_CALLBACK_PREFIX = "sth:v"
+VIDEO_LIST_LIMIT = 20
+VIDEO_LIST_QUERY_LIMIT = 100
+RECORD_MAX_DURATION_SEC = 3600
+
 
 TELEGRAM_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("start", "Show chat and topic id", "/start"),
     ("help", "Show available commands", "/help"),
     ("cameras", "Show camera and buffer status", "/cameras"),
     ("clip", "Record and send a camera clip", "/clip <camera> [seconds]"),
+    ("record", "Record a camera video to SSD", "/record <camera> [seconds]"),
+    ("videos", "Show saved camera videos", "/videos [camera]"),
     ("last", "Send latest saved video", "/last [camera]"),
     ("snapshot", "Capture and send one camera frame", "/snapshot <camera>"),
     ("arm", "Enable automatic event notifications", "/arm"),
@@ -155,6 +164,22 @@ class TelegramPolling:
                 return
             chat_id, message_thread_id = context
             await self._handle_clip(chat_id, message_thread_id, _message_args(message))
+
+        @self.dispatcher.message(Command("record"))
+        async def command_record(message: Message) -> None:
+            context = await self._admin_chat_context(message, "record camera videos to SSD")
+            if context is None:
+                return
+            chat_id, message_thread_id = context
+            await self._handle_record(chat_id, message_thread_id, _message_args(message))
+
+        @self.dispatcher.message(Command("videos"))
+        async def command_videos(message: Message) -> None:
+            context = await self._admin_chat_context(message, "send saved camera videos")
+            if context is None:
+                return
+            chat_id, message_thread_id = context
+            await self._handle_videos(chat_id, message_thread_id, _message_args(message))
 
         @self.dispatcher.message(Command("cameras"))
         async def command_cameras(message: Message) -> None:
@@ -272,6 +297,10 @@ class TelegramPolling:
         async def panel_callback(callback: CallbackQuery) -> None:
             await self._handle_panel_callback(callback)
 
+        @self.dispatcher.callback_query(F.data.startswith(f"{VIDEO_CALLBACK_PREFIX}:"))
+        async def video_callback(callback: CallbackQuery) -> None:
+            await self._handle_video_callback(callback)
+
         @self.dispatcher.message(F.voice)
         async def voice_message(message: Message) -> None:
             await self._handle_voice_message(message)
@@ -359,6 +388,80 @@ class TelegramPolling:
                 message=f"Camera {camera_id}",
             )
         await self._reply(chat_id, f"Clip job queued: {job_id}", message_thread_id=message_thread_id)
+
+    async def _handle_record(self, chat_id: int, message_thread_id: int | None, args: list[str]) -> None:
+        parsed = _parse_camera_command_args(
+            self.settings,
+            chat_id,
+            message_thread_id,
+            args,
+            usage="Usage: /record <camera> [seconds]",
+        )
+        if isinstance(parsed, str):
+            await self._reply(chat_id, parsed, message_thread_id=message_thread_id)
+            return
+        camera_id, remaining = parsed
+        camera = self.settings.cameras[camera_id]
+        try:
+            duration = int(remaining[0]) if remaining else camera.default_duration_sec
+        except ValueError:
+            await self._reply(
+                chat_id,
+                "Duration must be an integer number of seconds.",
+                message_thread_id=message_thread_id,
+            )
+            return
+        if len(remaining) > 1:
+            await self._reply(chat_id, "Usage: /record <camera> [seconds]", message_thread_id=message_thread_id)
+            return
+        duration = max(1, min(duration, RECORD_MAX_DURATION_SEC))
+
+        with new_session() as session:
+            job_id = create_record_video_file_job(
+                self.settings,
+                session,
+                self.queue,
+                source="telegram_record_command",
+                camera_id=camera_id,
+                duration_sec=duration,
+                pre_event_sec=0,
+                chat_ids=[chat_id],
+                message_thread_id=message_thread_id,
+                message=f"Manual SSD recording {camera_id}",
+            )
+        await self._reply(
+            chat_id,
+            f"Запись запущена: камера {camera_id}, {duration} сек.\nJob: {job_id}",
+            message_thread_id=message_thread_id,
+        )
+
+    async def _handle_videos(self, chat_id: int, message_thread_id: int | None, args: list[str]) -> None:
+        parsed = _parse_optional_camera_filter(
+            self.settings,
+            chat_id,
+            message_thread_id,
+            args,
+            usage="Usage: /videos [camera]",
+        )
+        if isinstance(parsed, str):
+            await self._reply(chat_id, parsed, message_thread_id=message_thread_id)
+            return
+        camera_id = parsed[0]
+
+        with new_session() as session:
+            videos = _load_recent_existing_videos(session, camera_id, limit=VIDEO_LIST_LIMIT)
+
+        if not videos:
+            scope = f" for camera {camera_id}" if camera_id else ""
+            await self._reply(chat_id, f"No saved videos found{scope}.", message_thread_id=message_thread_id)
+            return
+
+        await self._reply(
+            chat_id,
+            _build_video_list_text(videos, camera_id),
+            message_thread_id=message_thread_id,
+            reply_markup=_build_video_list_markup(videos),
+        )
 
     async def _handle_last(self, chat_id: int, message_thread_id: int | None, args: list[str]) -> None:
         camera_id = args[0] if args else None
@@ -563,6 +666,52 @@ class TelegramPolling:
 
         if sent:
             await self._reply(chat_id, f"Panels sent: {', '.join(sent)}", message_thread_id=message_thread_id)
+
+    async def _handle_video_callback(self, callback: CallbackQuery) -> None:
+        video_id = _parse_video_callback(callback.data or "")
+        if video_id is None:
+            await _answer_callback(callback, "Unknown video action.", alert=True)
+            return
+
+        chat_id, message_thread_id = _callback_chat_context(callback)
+        if chat_id is None:
+            await _answer_callback(callback, "Message context is unavailable.", alert=True)
+            return
+        if not chat_is_allowed(self.settings.telegram, chat_id):
+            await _answer_callback(callback, f"Chat id {chat_id} is not allowed.", alert=True)
+            return
+        if not _user_is_admin(self.settings, _callback_user_id(callback)):
+            await _answer_callback(callback, "This video action is admin-only.", alert=True)
+            return
+
+        with new_session() as session:
+            video = session.execute(
+                select(Video).where(Video.id == video_id, Video.deleted_at.is_(None))
+            ).scalar_one_or_none()
+            if video is None:
+                await _answer_callback(callback, "Video is not found.", alert=True)
+                return
+            path = Path(video.path)
+            if not path.exists():
+                await _answer_callback(callback, "Video file is missing on disk.", alert=True)
+                return
+            caption = _build_video_caption(video)
+
+        await _answer_callback(callback, "Отправляю видео")
+        try:
+            await self.client.send_video(
+                chat_id,
+                path,
+                caption=caption,
+                message_thread_id=message_thread_id,
+            )
+        except (TelegramApiError, TelegramAPIError, TelegramNetworkError):
+            logger.warning("Failed to send saved video %s", video_id, exc_info=True)
+            await self._reply(
+                chat_id,
+                f"Не удалось отправить видео #{video_id}.",
+                message_thread_id=message_thread_id,
+            )
 
     async def _handle_panel_callback(self, callback: CallbackQuery) -> None:
         parsed = parse_panel_callback(callback.data or "")
@@ -811,6 +960,7 @@ class TelegramPolling:
         text: str,
         message_thread_id: int | None = None,
         parse_mode: str | None = None,
+        reply_markup: InlineKeyboardMarkup | None = None,
     ) -> None:
         with suppress(TelegramApiError, TelegramAPIError, TelegramNetworkError):
             await self.client.send_message(
@@ -818,6 +968,7 @@ class TelegramPolling:
                 text,
                 message_thread_id=message_thread_id,
                 parse_mode=parse_mode,
+                reply_markup=reply_markup,
             )
 
 
@@ -854,6 +1005,142 @@ def _message_args(message: Message) -> list[str]:
     if len(parts) < 2:
         return []
     return parts[1].split()
+
+
+def _parse_camera_command_args(
+    settings: Settings,
+    chat_id: int,
+    message_thread_id: int | None,
+    args: list[str],
+    *,
+    usage: str,
+) -> tuple[str, list[str]] | str:
+    if args and args[0] in settings.cameras:
+        return args[0], args[1:]
+
+    _, topic_camera_id = _resolve_camera_topic(settings, chat_id, message_thread_id)
+    if topic_camera_id is not None:
+        return topic_camera_id, args
+
+    if args:
+        known = ", ".join(settings.cameras.keys())
+        return f"Unknown camera: {args[0]}. Available: {known}"
+    return usage
+
+
+def _parse_optional_camera_filter(
+    settings: Settings,
+    chat_id: int,
+    message_thread_id: int | None,
+    args: list[str],
+    *,
+    usage: str,
+) -> tuple[str | None] | str:
+    if len(args) > 1:
+        return usage
+    if args:
+        camera_id = args[0]
+        if camera_id not in settings.cameras:
+            known = ", ".join(settings.cameras.keys())
+            return f"Unknown camera: {camera_id}. Available: {known}"
+        return (camera_id,)
+
+    _, topic_camera_id = _resolve_camera_topic(settings, chat_id, message_thread_id)
+    return (topic_camera_id,)
+
+
+def _load_recent_existing_videos(
+    session,
+    camera_id: str | None,
+    *,
+    limit: int,
+) -> list[Video]:
+    query = select(Video).where(Video.deleted_at.is_(None)).order_by(Video.created_at.desc()).limit(VIDEO_LIST_QUERY_LIMIT)
+    if camera_id is not None:
+        query = (
+            select(Video)
+            .where(Video.deleted_at.is_(None), Video.camera_id == camera_id)
+            .order_by(Video.created_at.desc())
+            .limit(VIDEO_LIST_QUERY_LIMIT)
+        )
+    videos: list[Video] = []
+    for video in session.execute(query).scalars():
+        if Path(video.path).exists():
+            videos.append(video)
+        if len(videos) >= limit:
+            break
+    return videos
+
+
+def _build_video_list_text(videos: list[Video], camera_id: str | None) -> str:
+    title = f"Последние видео камеры {camera_id}" if camera_id else "Последние видео"
+    lines = [title, ""]
+    for index, video in enumerate(videos, 1):
+        lines.append(
+            f"{index}. #{video.id} | {video.camera_id} | "
+            f"{_format_video_time(video.created_at)} | "
+            f"{_format_video_duration(video.duration_sec)} | "
+            f"{format_bytes(video.size_bytes)}"
+        )
+    lines.append("")
+    lines.append("Нажми кнопку ниже, чтобы отправить выбранное видео в этот топик.")
+    return "\n".join(lines)
+
+
+def _build_video_list_markup(videos: list[Video]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for video in videos:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=_video_button_text(video),
+                    callback_data=f"{VIDEO_CALLBACK_PREFIX}:{video.id}",
+                )
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _video_button_text(video: Video) -> str:
+    return (
+        f"#{video.id} {video.camera_id} "
+        f"{_format_video_time(video.created_at)} "
+        f"{_format_video_duration(video.duration_sec)} "
+        f"{format_bytes(video.size_bytes)}"
+    )
+
+
+def _build_video_caption(video: Video) -> str:
+    return (
+        f"Видео #{video.id}\n"
+        f"Камера: {video.camera_id}\n"
+        f"Записано: {_format_video_time(video.created_at)}\n"
+        f"Длительность: {_format_video_duration(video.duration_sec)}\n"
+        f"Размер: {format_bytes(video.size_bytes)}"
+    )
+
+
+def _format_video_time(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC).strftime("%d.%m %H:%M UTC")
+
+
+def _format_video_duration(value: int | None) -> str:
+    if value is None:
+        return "-"
+    return f"{value} сек"
+
+
+def _parse_video_callback(data: str) -> int | None:
+    parts = data.split(":")
+    if len(parts) != 3 or parts[0] != "sth" or parts[1] != "v":
+        return None
+    try:
+        video_id = int(parts[2])
+    except ValueError:
+        return None
+    return video_id if video_id > 0 else None
 
 
 async def _answer_callback(callback: CallbackQuery, text: str, *, alert: bool = False) -> None:
