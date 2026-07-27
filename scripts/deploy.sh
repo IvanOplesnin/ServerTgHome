@@ -64,6 +64,7 @@ Environment:
   STH_FORCE=1                    Force rebuild/recreate on deploy.
   STH_PULL_IMAGES=1              Pull postgres/redis/go2rtc images even when git has no updates.
   STH_START_WITH_NEW_CONFIG=1    Start even if .env/config.yaml/go2rtc.yaml were just created.
+  STH_HEALTH_URL=http://127.0.0.1:18080/health
 EOF
 }
 
@@ -232,6 +233,8 @@ HOME_ASSISTANT_TOKEN=
 POSTGRES_DB=server_tg_home
 POSTGRES_USER=server_tg_home
 POSTGRES_PASSWORD=$postgres_password
+STH_PUBLIC_HOST=
+COMPOSE_PROFILES=
 EOF
     chmod 600 "$APP_DIR/.env"
     RUNTIME_FILES_CREATED=1
@@ -240,17 +243,24 @@ EOF
 }
 
 stack_running() {
-  local services
+  local expected_services service services
+  expected_services="$(compose config --services 2>/dev/null || true)"
   services="$(compose ps --status running --services 2>/dev/null || true)"
-  for service in postgres redis go2rtc api worker graph-worker audio-worker buffer retention; do
+  [ -n "$expected_services" ] || return 1
+  while IFS= read -r service; do
+    [ -n "$service" ] || continue
     if ! printf '%s\n' "$services" | grep -qx "$service"; then
       return 1
     fi
-  done
+  done <<<"$expected_services"
   return 0
 }
 
 deploy_stack() {
+  if miniapp_profile_requested && ! compose_service_defined miniapp-gateway; then
+    die "COMPOSE_PROFILES enables miniapp, but the active runtime compose file has no miniapp-gateway service"
+  fi
+
   if [ "$RUNTIME_FILES_CREATED" = "1" ] && [ "$START_WITH_NEW_CONFIG" != "1" ]; then
     cat <<EOF
 
@@ -286,16 +296,46 @@ EOF
 }
 
 check_health() {
-  local url="${STH_HEALTH_URL:-http://127.0.0.1:8080/health}"
+  local url="${STH_HEALTH_URL:-http://127.0.0.1:18080/health}"
   log "Waiting for API health: $url"
+  local api_ready=0
   for _ in $(seq 1 60); do
     if curl -fsS "$url" >/dev/null 2>&1; then
       log "API is healthy"
-      return
+      api_ready=1
+      break
     fi
     sleep 2
   done
-  log "API health check did not pass yet. Check logs with: $APP_DIR/scripts/deploy.sh logs"
+  if [ "$api_ready" != "1" ]; then
+    log "API health check did not pass yet. Check logs with: $APP_DIR/scripts/deploy.sh logs"
+  fi
+
+  if compose_service_active miniapp-gateway; then
+    local public_host gateway_ready
+    public_host="$(runtime_env_value STH_PUBLIC_HOST)"
+    gateway_ready=0
+    if [ -z "$public_host" ] || [ "$public_host" = "localhost" ]; then
+      log "Mini App gateway is enabled, but STH_PUBLIC_HOST is not configured"
+      return
+    fi
+
+    log "Waiting for Mini App HTTPS: https://$public_host/"
+    for _ in $(seq 1 30); do
+      if curl -fsS --max-time 5 "https://$public_host/" >/dev/null 2>&1; then
+        log "Mini App HTTPS is healthy"
+        gateway_ready=1
+        break
+      fi
+      sleep 2
+    done
+    if [ "$gateway_ready" != "1" ]; then
+      log "Mini App HTTPS check did not pass yet. Check DNS, ports 80/443 and gateway logs."
+    fi
+    if ! compose ps --status running --services 2>/dev/null | grep -qx go2rtc; then
+      log "go2rtc is not running; live video will be unavailable"
+    fi
+  fi
 }
 
 create_ssh_key() {
@@ -433,6 +473,56 @@ doctor_file() {
   fi
 }
 
+runtime_env_has_value() {
+  local key="$1"
+  grep -Eq "^${key}=[^[:space:]]+" "$APP_DIR/.env"
+}
+
+runtime_env_value() {
+  local key="$1"
+  local line
+  line="$(grep -E "^${key}=" "$APP_DIR/.env" 2>/dev/null | tail -n 1 || true)"
+  printf '%s' "${line#*=}"
+}
+
+miniapp_profile_requested() {
+  local profiles
+  profiles=",$(runtime_env_value COMPOSE_PROFILES),"
+  [[ "$profiles" == *,miniapp,* ]]
+}
+
+compose_service_active() {
+  local service="$1"
+  compose config --services 2>/dev/null | grep -qx "$service"
+}
+
+compose_service_defined() {
+  local service="$1"
+  compose --profile miniapp config --services 2>/dev/null | grep -qx "$service"
+}
+
+runtime_webapp_public_host() {
+  awk '
+    $1 == "webapp:" { in_webapp = 1; next }
+    in_webapp && /^[^[:space:]]/ { in_webapp = 0 }
+    in_webapp && $1 == "public_url:" {
+      value = $2
+      gsub(/"/, "", value)
+      sub(/^https:\/\//, "", value)
+      sub(/\/.*$/, "", value)
+      print value
+      exit
+    }
+  ' "$APP_DIR/config/config.yaml"
+}
+
+miniapp_hosts_match() {
+  local configured_host public_host
+  public_host="$(runtime_env_value STH_PUBLIC_HOST)"
+  configured_host="$(runtime_webapp_public_host)"
+  [ -n "$public_host" ] && [ "$public_host" = "$configured_host" ]
+}
+
 git_worktree_clean() {
   git -C "$APP_DIR" diff --quiet && git -C "$APP_DIR" diff --cached --quiet
 }
@@ -468,9 +558,16 @@ show_doctor() {
   doctor_file "$APP_DIR/config/config.yaml"
   doctor_file "$APP_DIR/config/go2rtc.yaml"
   doctor_file "$APP_DIR/docker-compose.yml"
+  if [ -f "$APP_DIR/.env" ]; then
+    doctor_check "STH_PUBLIC_HOST is configured" runtime_env_has_value STH_PUBLIC_HOST
+  fi
 
   if [ -f "$APP_DIR/docker-compose.yml" ]; then
     doctor_check "docker compose config is valid" bash -c "cd '$APP_DIR' && docker compose config --quiet"
+    doctor_check "runtime compose defines miniapp-gateway" compose_service_defined miniapp-gateway
+    if compose_service_active miniapp-gateway; then
+      doctor_check "STH_PUBLIC_HOST matches webapp.public_url" miniapp_hosts_match
+    fi
     log "Compose services:"
     compose ps 2>/dev/null || true
   fi

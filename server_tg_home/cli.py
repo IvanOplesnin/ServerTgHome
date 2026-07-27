@@ -22,6 +22,11 @@ def main() -> None:
     api.add_argument("--host", default="0.0.0.0")
     api.add_argument("--port", type=int, default=8080)
     api.add_argument("--reload", action="store_true")
+    api.add_argument(
+        "--no-access-log",
+        action="store_true",
+        help="Disable Uvicorn request logs when URLs contain capability tickets",
+    )
 
     subparsers.add_parser("worker", help="Run job worker")
     subparsers.add_parser("graph-worker", help="Run graph rendering worker")
@@ -44,6 +49,7 @@ def main() -> None:
             host=args.host,
             port=args.port,
             reload=args.reload,
+            access_log=not args.no_access_log,
         )
         return
 

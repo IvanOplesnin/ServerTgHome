@@ -39,6 +39,7 @@ Docker Compose services:
 - `buffer`: long-running process that starts one `ffmpeg` process per buffered camera.
 - `retention`: APScheduler process for cleanup and camera health checks.
 - `go2rtc`: media gateway for Tapo two-way audio and RTSP restreams.
+- `miniapp-gateway`: Caddy HTTPS endpoint, Mini App static frontend and protected media proxy.
 - `postgres`: persistent database for jobs, video/audio records and sensor history.
 - `redis`: Dramatiq broker.
 
@@ -71,6 +72,7 @@ server_tg_home/
   telegram/       aiogram polling, commands, panels and Telegram client.
   workers/        Buffer and retention workers.
   cli.py          Entry point for every container.
+webapp/           React/TypeScript Telegram Mini App frontend.
 ```
 
 ## Requirements
@@ -84,7 +86,7 @@ Minimum Ubuntu Server environment:
 - Network access to GitHub and Docker Hub.
 - Network access to Telegram API or a Telegram proxy.
 - LAN access to RTSP/go2rtc/cameras.
-- Home Assistant access to `http://server-ip:8080`.
+- Home Assistant on the same mini PC can access `http://127.0.0.1:18080`.
 
 Resources:
 
@@ -94,9 +96,14 @@ Resources:
 
 Ports:
 
-- `8080/tcp`: Server Tg Home HTTP API, exposed to the LAN.
+- `80/tcp`, `443/tcp`: public Telegram Mini App HTTPS gateway.
+- `8555/tcp+udp`: public WebRTC media transport.
+- `18080/tcp`: Server Tg Home HTTP API, bound to `127.0.0.1`.
 - `1984/tcp`: go2rtc web/API, bound to `127.0.0.1` by compose.
 - `8554/tcp`: go2rtc RTSP inside the Docker network, not exposed to the host.
+
+See [docs/telegram-mini-app-deployment.md](docs/telegram-mini-app-deployment.md)
+for DNS, TLS, port forwarding and media allowlist details.
 
 ## Quick Start
 
@@ -116,6 +123,8 @@ HOME_ASSISTANT_TOKEN=ha-long-lived-access-token
 POSTGRES_DB=server_tg_home
 POSTGRES_USER=server_tg_home
 POSTGRES_PASSWORD=change-this-password
+STH_PUBLIC_HOST=miniapp.example.com
+COMPOSE_PROFILES=miniapp
 ```
 
 Edit `config/config.yaml`, then run:
@@ -123,7 +132,7 @@ Edit `config/config.yaml`, then run:
 ```bash
 docker compose up --build -d
 docker compose logs -f --tail=200
-curl http://127.0.0.1:8080/health
+curl http://127.0.0.1:18080/health
 ```
 
 ## HTTP API
@@ -141,7 +150,7 @@ If `app.webhook_token` is empty, token validation is disabled. That is useful du
 Returns API and queue health plus configured cameras/events/rooms.
 
 ```bash
-curl http://server-host:8080/health
+curl http://127.0.0.1:18080/health
 ```
 
 ### `GET /status`
@@ -149,7 +158,7 @@ curl http://server-host:8080/health
 Returns a text service status similar to Telegram `/status`.
 
 ```bash
-curl http://server-host:8080/status
+curl http://127.0.0.1:18080/status
 ```
 
 ### `POST /events/{event_id}`
@@ -157,7 +166,7 @@ curl http://server-host:8080/status
 Main Home Assistant event endpoint. `event_id` must exist in `events`.
 
 ```bash
-curl -X POST http://server-host:8080/events/door_open \
+curl -X POST http://127.0.0.1:18080/events/door_open \
   -H "X-Webhook-Token: change-me" \
   -H "Content-Type: application/json" \
   -d '{"entity_id":"binary_sensor.main_door_contact"}'
@@ -180,7 +189,7 @@ Suppressed response:
 Creates a video recording job directly from HTTP.
 
 ```bash
-curl -X POST http://server-host:8080/jobs/record-video \
+curl -X POST http://127.0.0.1:18080/jobs/record-video \
   -H "X-Webhook-Token: change-me" \
   -H "Content-Type: application/json" \
   -d '{
@@ -198,7 +207,7 @@ curl -X POST http://server-host:8080/jobs/record-video \
 Stores temperature and optional humidity values. The old payload with only `temperatures` remains supported.
 
 ```bash
-curl -X POST http://server-host:8080/webhooks/temperatures \
+curl -X POST http://127.0.0.1:18080/webhooks/temperatures \
   -H "X-Webhook-Token: change-me" \
   -H "Content-Type: application/json" \
   -d '{
@@ -242,6 +251,8 @@ HOME_ASSISTANT_TOKEN=
 POSTGRES_DB=server_tg_home
 POSTGRES_USER=server_tg_home
 POSTGRES_PASSWORD=
+STH_PUBLIC_HOST=miniapp.example.com
+COMPOSE_PROFILES=miniapp
 ```
 
 - `TELEGRAM_BOT_TOKEN`: BotFather token.
@@ -249,6 +260,9 @@ POSTGRES_PASSWORD=
 - `STH_WEBHOOK_TOKEN`: token passed as `X-Webhook-Token`.
 - `HOME_ASSISTANT_TOKEN`: long-lived access token for commands like `/ac_on`.
 - `POSTGRES_*`: Postgres database, user and password.
+- `STH_PUBLIC_HOST`: public Mini App DNS name without `https://` or a path.
+- `COMPOSE_PROFILES=miniapp`: explicitly enables the HTTPS gateway and
+  publishes `80/443`; without it the existing service stack keeps its old behavior.
 
 ### Main Sections
 
@@ -510,7 +524,7 @@ automation:
 
 rest_command:
   server_tg_home_door_open:
-    url: "http://192.168.1.17:8080/events/door_open"
+    url: "http://127.0.0.1:18080/events/door_open"
     method: POST
     headers:
       X-Webhook-Token: "change-me"
@@ -535,7 +549,7 @@ automation:
 
 rest_command:
   server_tg_home_room_climate:
-    url: "http://192.168.1.17:8080/webhooks/temperatures"
+    url: "http://127.0.0.1:18080/webhooks/temperatures"
     method: POST
     headers:
       X-Webhook-Token: "change-me"
@@ -684,7 +698,7 @@ Then:
 
 ```bash
 ./scripts/deploy.sh status
-curl http://127.0.0.1:8080/health
+curl http://127.0.0.1:18080/health
 docker compose logs -f --tail=200
 ```
 

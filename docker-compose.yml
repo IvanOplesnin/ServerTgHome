@@ -28,11 +28,42 @@ services:
       - ./data:/data:ro
     ports:
       - "127.0.0.1:1984:1984"
+      - "8555:8555/tcp"
+      - "8555:8555/udp"
+
+  miniapp-gateway:
+    profiles: ["miniapp"]
+    build:
+      context: .
+      dockerfile: docker/miniapp.Dockerfile
+    restart: unless-stopped
+    environment:
+      STH_PUBLIC_HOST: ${STH_PUBLIC_HOST:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      api:
+        condition: service_started
+      go2rtc:
+        condition: service_started
 
   api:
     build: .
     restart: unless-stopped
-    command: ["server-tg-home", "api", "--host", "0.0.0.0", "--port", "8080"]
+    command:
+      - "server-tg-home"
+      - "api"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8080"
+      - "--no-access-log"
     environment:
       STH_CONFIG: /app/config/config.yaml
       POSTGRES_DB: ${POSTGRES_DB:-server_tg_home}
@@ -43,7 +74,7 @@ services:
       HOME_ASSISTANT_TOKEN: ${HOME_ASSISTANT_TOKEN:-}
       STH_WEBHOOK_TOKEN: ${STH_WEBHOOK_TOKEN:-}
     ports:
-      - "8080:8080"
+      - "127.0.0.1:18080:8080"
     volumes:
       - ./config:/app/config:ro
       - ./data:/data
@@ -151,3 +182,5 @@ services:
 volumes:
   postgres-data:
   redis-data:
+  caddy-data:
+  caddy-config:

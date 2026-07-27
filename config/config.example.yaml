@@ -59,6 +59,7 @@ webapp:
   # An empty list grants access to nobody except explicitly configured administrators.
   viewer_user_ids: []
   require_group_membership: true
+  membership_recheck_sec: 300
   auth_max_age_sec: 300
   session_ttl_sec: 3600
   media_ticket_ttl_sec: 3600
@@ -151,10 +152,10 @@ cameras:
     title: "Входная дверь"
     web_enabled: true
     rtsp_url: "rtsp://user:password@192.168.1.10:554/stream1"
-    ffmpeg_url: null
+    ffmpeg_url: "rtsp://go2rtc:8554/entrance"
     buffer_enabled: true
     speaker_enabled: false
-    go2rtc_stream: null
+    go2rtc_stream: "entrance"
     speaker_audio_codec: "pcma"
     default_duration_sec: 20
     ffmpeg_input_args:
@@ -198,6 +199,19 @@ cameras:
     buffer_enabled: true
     speaker_enabled: true
     go2rtc_stream: "living"
+    speaker_audio_codec: "pcma"
+    default_duration_sec: 20
+    ffmpeg_input_args:
+      - "-rtsp_transport"
+      - "tcp"
+  bed:
+    title: "Спальня"
+    web_enabled: true
+    rtsp_url: "rtsp://user:password@192.168.1.30:554/stream1"
+    ffmpeg_url: "rtsp://go2rtc:8554/bed"
+    buffer_enabled: true
+    speaker_enabled: false
+    go2rtc_stream: "bed"
     speaker_audio_codec: "pcma"
     default_duration_sec: 20
     ffmpeg_input_args:

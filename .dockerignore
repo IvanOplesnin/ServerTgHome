@@ -5,4 +5,12 @@ __pycache__
 *.pyc
 data
 backups
-.env
+.env*
+compose.yaml
+compose.override.yaml
+config/config.yaml
+config/config.yaml.*
+config/go2rtc.yaml
+config/go2rtc.yaml.*
+webapp/node_modules
+webapp/dist

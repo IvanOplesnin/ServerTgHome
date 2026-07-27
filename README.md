@@ -39,6 +39,7 @@ Server Tg Home - локальный сервис для связки Home Assist
 - `buffer`: долгоживущий процесс, который запускает по одному `ffmpeg` на каждую камеру с `buffer_enabled: true`.
 - `retention`: APScheduler-процесс для очистки видео, аудио, графиков, истории датчиков и healthcheck камер.
 - `go2rtc`: media gateway для Tapo two-way audio и restream RTSP.
+- `miniapp-gateway`: Caddy с HTTPS, статической сборкой Telegram Mini App и защищенным media proxy.
 - `postgres`: БД задач, статусов, видео, аудио и истории датчиков.
 - `redis`: брокер очередей Dramatiq.
 
@@ -71,6 +72,7 @@ server_tg_home/
   telegram/       aiogram polling, команды, панели, Telegram client.
   workers/        buffer worker и retention worker.
   cli.py          Точка входа для всех контейнеров.
+webapp/           React/TypeScript frontend Telegram Mini App.
 ```
 
 Правила добавления логики:
@@ -95,7 +97,7 @@ server_tg_home/
 - Доступ сервера к GitHub и Docker Hub для установки и обновлений.
 - Доступ сервера к Telegram API или к Telegram proxy.
 - Доступ сервера к RTSP/go2rtc/камерам в локальной сети.
-- Доступ Home Assistant к `http://server-ip:8080`.
+- Доступ Home Assistant на этом же mini PC к `http://127.0.0.1:18080`.
 
 Ресурсы:
 
@@ -105,9 +107,14 @@ server_tg_home/
 
 Открытые порты:
 
-- `8080/tcp`: HTTP API Server Tg Home, доступен в локальной сети.
+- `80/tcp`, `443/tcp`: публичный HTTPS gateway Telegram Mini App.
+- `8555/tcp+udp`: публичный WebRTC media transport.
+- `18080/tcp`: HTTP API Server Tg Home, опубликован только на `127.0.0.1`.
 - `1984/tcp`: go2rtc web/API, в compose опубликован только на `127.0.0.1`.
 - `8554/tcp`: RTSP go2rtc внутри Docker network, наружу не опубликован.
+
+Подробная схема DNS, TLS, port forwarding и media allowlist:
+[docs/telegram-mini-app-deployment.md](docs/telegram-mini-app-deployment.md).
 
 ## Быстрый Локальный Запуск
 
@@ -127,6 +134,8 @@ HOME_ASSISTANT_TOKEN=ha-long-lived-access-token
 POSTGRES_DB=server_tg_home
 POSTGRES_USER=server_tg_home
 POSTGRES_PASSWORD=change-this-password
+STH_PUBLIC_HOST=miniapp.example.com
+COMPOSE_PROFILES=miniapp
 ```
 
 Заполните `config/config.yaml`, затем запустите:
@@ -139,7 +148,7 @@ docker compose logs -f --tail=200
 Проверка:
 
 ```bash
-curl http://127.0.0.1:8080/health
+curl http://127.0.0.1:18080/health
 ```
 
 ## HTTP API
@@ -157,7 +166,7 @@ X-Webhook-Token: <STH_WEBHOOK_TOKEN>
 Проверяет, что API поднялся, Redis доступен, и возвращает списки камер/событий/комнат.
 
 ```bash
-curl http://server-host:8080/health
+curl http://127.0.0.1:18080/health
 ```
 
 Пример ответа:
@@ -179,7 +188,7 @@ curl http://server-host:8080/health
 Возвращает текстовый статус сервиса, аналогичный Telegram-команде `/status`.
 
 ```bash
-curl http://server-host:8080/status
+curl http://127.0.0.1:18080/status
 ```
 
 ### `POST /events/{event_id}`
@@ -187,7 +196,7 @@ curl http://server-host:8080/status
 Основной endpoint для событий Home Assistant. `event_id` должен существовать в `events` в конфиге.
 
 ```bash
-curl -X POST http://server-host:8080/events/door_open \
+curl -X POST http://127.0.0.1:18080/events/door_open \
   -H "X-Webhook-Token: change-me" \
   -H "Content-Type: application/json" \
   -d '{"entity_id":"binary_sensor.main_door_contact"}'
@@ -210,7 +219,7 @@ curl -X POST http://server-host:8080/events/door_open \
 Создает задачу записи видео напрямую через HTTP API.
 
 ```bash
-curl -X POST http://server-host:8080/jobs/record-video \
+curl -X POST http://127.0.0.1:18080/jobs/record-video \
   -H "X-Webhook-Token: change-me" \
   -H "Content-Type: application/json" \
   -d '{
@@ -237,7 +246,7 @@ curl -X POST http://server-host:8080/jobs/record-video \
 Сохраняет температуру и, опционально, влажность. Старый контракт только с `temperatures` сохраняется.
 
 ```bash
-curl -X POST http://server-host:8080/webhooks/temperatures \
+curl -X POST http://127.0.0.1:18080/webhooks/temperatures \
   -H "X-Webhook-Token: change-me" \
   -H "Content-Type: application/json" \
   -d '{
@@ -283,6 +292,8 @@ HOME_ASSISTANT_TOKEN=
 POSTGRES_DB=server_tg_home
 POSTGRES_USER=server_tg_home
 POSTGRES_PASSWORD=
+STH_PUBLIC_HOST=miniapp.example.com
+COMPOSE_PROFILES=miniapp
 ```
 
 - `TELEGRAM_BOT_TOKEN`: токен от BotFather.
@@ -290,6 +301,9 @@ POSTGRES_PASSWORD=
 - `STH_WEBHOOK_TOKEN`: токен для HTTP webhook/API. В Home Assistant передается в `X-Webhook-Token`.
 - `HOME_ASSISTANT_TOKEN`: long-lived access token Home Assistant для команд вроде `/ac_on`.
 - `POSTGRES_*`: имя БД, пользователь и пароль Postgres.
+- `STH_PUBLIC_HOST`: публичное DNS-имя Mini App без `https://` и пути.
+- `COMPOSE_PROFILES=miniapp`: явно включает HTTPS gateway и публикацию
+  `80/443`; без профиля остальной стек продолжает работать как раньше.
 
 ### `app`
 
@@ -878,7 +892,7 @@ automation:
 
 rest_command:
   server_tg_home_door_open:
-    url: "http://192.168.1.17:8080/events/door_open"
+    url: "http://127.0.0.1:18080/events/door_open"
     method: POST
     headers:
       X-Webhook-Token: "change-me"
@@ -903,7 +917,7 @@ automation:
 
 rest_command:
   server_tg_home_room_climate:
-    url: "http://192.168.1.17:8080/webhooks/temperatures"
+    url: "http://127.0.0.1:18080/webhooks/temperatures"
     method: POST
     headers:
       X-Webhook-Token: "change-me"
@@ -1064,7 +1078,7 @@ nano config/go2rtc.yaml
 
 ```bash
 ./scripts/deploy.sh status
-curl http://127.0.0.1:8080/health
+curl http://127.0.0.1:18080/health
 docker compose logs -f --tail=200
 ```
 
