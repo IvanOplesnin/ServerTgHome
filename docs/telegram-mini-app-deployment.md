@@ -266,6 +266,10 @@ miniapp.example.com {
 			rewrite * {re.protected_media.upstream}
 			header Cache-Control "no-store"
 			reverse_proxy MINIPC_LAN_IP:21984 {
+				# Browser Origin contains the public HTTPS domain, while go2rtc
+				# sees this trusted hop as internal HTTP and otherwise returns 403.
+				# forward_auth above has already validated the capability ticket.
+				header_up -Origin
 				stream_timeout 10m
 			}
 		}
@@ -293,6 +297,9 @@ miniapp.example.com {
 Caddy обращается к FastAPI, который проверяет ticket, разрешенную камеру,
 allowlist пользователя и членство в группе. Постоянный WebSocket ограничен
 десятью минутами, а frontend обновляет ticket и переподключается заранее.
+`Origin` удаляется только на этом уже авторизованном proxy-hop: это сохраняет
+встроенную origin-защиту go2rtc на остальных его интерфейсах и не требует
+небезопасного глобального `api.origin: "*"`.
 
 Capability-ticket находится в URL. Не включайте access log для
 `/media/t/*` и `/api/webapp/v1/files/*`. В проекте Uvicorn и `miniapp-web`
