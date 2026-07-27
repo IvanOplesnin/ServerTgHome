@@ -30,11 +30,15 @@ interface RequestOptions extends Omit<RequestInit, "body"> {
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers = new Headers(options.headers);
+  const method = (options.method ?? "GET").toUpperCase();
   let body: BodyInit | undefined;
 
   if (options.body !== undefined) {
     headers.set("Content-Type", "application/json");
     body = JSON.stringify(options.body);
+  }
+  if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+    headers.set("X-STH-WebApp", "1");
   }
   if (accessToken) {
     headers.set("Authorization", `Bearer ${accessToken}`);

@@ -49,19 +49,27 @@ export function App(): React.ReactElement {
 
     async function start(): Promise<void> {
       setState({ status: "loading" });
-      const initData = getTelegramInitData();
-      if (!initData) {
-        setState({
-          status: "error",
-          title: "Откройте приложение в Telegram",
-          message:
-            "Для безопасного входа запустите Mini App кнопкой в групповом чате с ботом.",
-        });
-        return;
-      }
       try {
-        await api.createSession(initData, controller.signal);
-        const bootstrap = await api.getBootstrap(controller.signal);
+        let bootstrap: BootstrapResponse;
+        try {
+          bootstrap = await api.getBootstrap(controller.signal);
+        } catch (error) {
+          if (!(error instanceof ApiError) || error.status !== 401) {
+            throw error;
+          }
+          const initData = getTelegramInitData();
+          if (!initData) {
+            setState({
+              status: "error",
+              title: "Откройте приложение в Telegram",
+              message:
+                "Для безопасного входа запустите Mini App кнопкой в групповом чате с ботом.",
+            });
+            return;
+          }
+          await api.createSession(initData, controller.signal);
+          bootstrap = await api.getBootstrap(controller.signal);
+        }
         if (!controller.signal.aborted) {
           setState({
             status: "ready",

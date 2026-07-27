@@ -276,7 +276,8 @@ class WebAppControlTests(unittest.TestCase):
         self._login()
 
         response = self.client.post(
-            "/api/webapp/v1/streams/private/ticket"
+            "/api/webapp/v1/streams/private/ticket",
+            headers={"X-STH-WebApp": "1"},
         )
 
         self.assertEqual(response.status_code, 404)
@@ -310,7 +311,8 @@ class WebAppControlTests(unittest.TestCase):
         video_id, _ = self._add_video()
         self._login()
         ticket = self.client.post(
-            f"/api/webapp/v1/videos/{video_id}/download-ticket"
+            f"/api/webapp/v1/videos/{video_id}/download-ticket",
+            headers={"X-STH-WebApp": "1"},
         ).json()
 
         self.settings.telegram.admin_user_ids.clear()
@@ -321,12 +323,33 @@ class WebAppControlTests(unittest.TestCase):
     def test_logout_revokes_session_and_clears_cookie(self) -> None:
         self._login()
 
-        logout = self.client.delete("/api/webapp/v1/session")
+        logout = self.client.delete(
+            "/api/webapp/v1/session",
+            headers={"X-STH-WebApp": "1"},
+        )
         after = self.client.get("/api/webapp/v1/bootstrap")
 
         self.assertEqual(logout.status_code, 204)
         self.assertIn("sth_webapp_session=", logout.headers["set-cookie"])
         self.assertEqual(after.status_code, 401)
+
+    def test_cookie_authenticated_post_requires_csrf_marker(self) -> None:
+        self._login()
+
+        rejected = self.client.post(
+            "/api/webapp/v1/streams/entrance/ticket"
+        )
+        accepted = self.client.post(
+            "/api/webapp/v1/streams/entrance/ticket",
+            headers={"X-STH-WebApp": "1"},
+        )
+
+        self.assertEqual(rejected.status_code, 403)
+        self.assertEqual(
+            rejected.json()["detail"]["code"],
+            "csrf_check_failed",
+        )
+        self.assertEqual(accepted.status_code, 200)
 
 
 if __name__ == "__main__":

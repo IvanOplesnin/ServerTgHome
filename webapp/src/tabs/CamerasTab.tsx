@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "../api/client";
 import type {
@@ -87,6 +87,7 @@ export function CamerasTab({ bootstrap }: TabComponentProps): React.ReactElement
   const [ticketErrors, setTicketErrors] = useState<Record<string, string>>({});
   const [downloadingId, setDownloadingId] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const archiveRequestRef = useRef(0);
 
   const selectedCamera =
     cameras.find((camera) => camera.id === selectedId) ?? cameras[0];
@@ -127,32 +128,46 @@ export function CamerasTab({ bootstrap }: TabComponentProps): React.ReactElement
   }, [refreshCameras]);
 
   const loadVideos = useCallback(
-    async (cursor?: string, append = false) => {
+    async (cursor?: string, append = false, signal?: AbortSignal) => {
       if (!selectedCameraId) {
         return;
       }
+      const requestId = ++archiveRequestRef.current;
       setArchiveLoading(true);
       setArchiveError(undefined);
       try {
-        const response = await api.getVideos(selectedCameraId, cursor);
+        const response = await api.getVideos(selectedCameraId, cursor, 12, signal);
+        if (signal?.aborted || requestId !== archiveRequestRef.current) {
+          return;
+        }
         setVideos((current) => (append ? current.concat(response.items) : response.items));
         setNextCursor(response.next_cursor ?? null);
       } catch (error) {
+        if (signal?.aborted || requestId !== archiveRequestRef.current) {
+          return;
+        }
         setArchiveError(error instanceof Error ? error.message : "Не удалось загрузить архив");
       } finally {
-        setArchiveLoading(false);
+        if (requestId === archiveRequestRef.current) {
+          setArchiveLoading(false);
+        }
       }
     },
     [selectedCameraId],
   );
 
   useEffect(() => {
+    const controller = new AbortController();
     setVideos([]);
     setNextCursor(undefined);
     setExpandedVideoId(undefined);
     setVideoTickets({});
     setTicketErrors({});
-    void loadVideos();
+    void loadVideos(undefined, false, controller.signal);
+    return () => {
+      controller.abort();
+      archiveRequestRef.current += 1;
+    };
   }, [loadVideos]);
 
   const startLive = (): void => {
