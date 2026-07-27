@@ -38,17 +38,30 @@ class MiniAppInfrastructureTests(unittest.TestCase):
         self.assertTrue(camera_ids.issubset(go2rtc["streams"]))
         self.assertEqual(go2rtc["webrtc"]["listen"], ":8555")
 
-    def test_compose_keeps_management_ports_private(self) -> None:
+    def test_compose_uses_external_reverse_proxy_bindings(self) -> None:
         compose = yaml.safe_load(
             (REPOSITORY_ROOT / "docker-compose.yml").read_text()
         )
         services = compose["services"]
+        proxy_bind = "${STH_REVERSE_PROXY_BIND_ADDRESS:-127.0.0.1}"
 
-        self.assertEqual(services["api"]["ports"], ["127.0.0.1:18080:8080"])
+        self.assertEqual(
+            services["api"]["ports"],
+            [
+                "127.0.0.1:18080:8080",
+                f"{proxy_bind}:28080:8080",
+            ],
+        )
         self.assertIn("--no-access-log", services["api"]["command"])
-        self.assertIn("127.0.0.1:1984:1984", services["go2rtc"]["ports"])
-        self.assertIn("8555:8555/tcp", services["go2rtc"]["ports"])
-        self.assertIn("8555:8555/udp", services["go2rtc"]["ports"])
+        self.assertEqual(
+            set(services["go2rtc"]["ports"]),
+            {
+                "127.0.0.1:1984:1984",
+                f"{proxy_bind}:21984:1984",
+                "8555:8555/tcp",
+                "8555:8555/udp",
+            },
+        )
         self.assertFalse(
             any(
                 "8554" in str(port)
@@ -57,24 +70,60 @@ class MiniAppInfrastructureTests(unittest.TestCase):
             )
         )
         self.assertEqual(
-            set(services["miniapp-gateway"]["ports"]),
-            {"80:80", "443:443"},
+            services["miniapp-web"]["ports"],
+            [f"{proxy_bind}:18082:8080"],
         )
-        self.assertEqual(services["miniapp-gateway"]["profiles"], ["miniapp"])
+        self.assertEqual(services["miniapp-web"]["profiles"], ["miniapp"])
+        self.assertEqual(services["miniapp-web"]["cap_drop"], ["ALL"])
+        self.assertTrue(services["miniapp-web"]["read_only"])
+        self.assertNotIn("miniapp-gateway", services)
+        self.assertFalse(
+            {"caddy-data", "caddy-config"}.intersection(
+                compose.get("volumes", {})
+            )
+        )
+        self.assertFalse(
+            any(
+                str(port).split(":")[-2] in {"80", "443"}
+                for service in services.values()
+                for port in service.get("ports", [])
+            )
+        )
         self.assertNotIn("ports", services["postgres"])
         self.assertNotIn("ports", services["redis"])
 
-    def test_caddy_has_strict_api_and_media_allowlists(self) -> None:
-        caddyfile = (
-            REPOSITORY_ROOT / "docker" / "miniapp.Caddyfile"
+    def test_miniapp_image_is_static_only_and_has_no_caddy(self) -> None:
+        dockerfile = (
+            REPOSITORY_ROOT / "docker" / "miniapp.Dockerfile"
+        ).read_text()
+        nginx_config = (
+            REPOSITORY_ROOT / "docker" / "miniapp.nginx.conf"
         ).read_text()
 
-        self.assertIn("@webapp_api path /api/webapp /api/webapp/*", caddyfile)
-        self.assertIn("@blocked_api path /api /api/*", caddyfile)
+        self.assertIn("nginxinc/nginx-unprivileged:", dockerfile)
+        self.assertNotIn("caddy", dockerfile.lower())
+        self.assertIn("listen 8080", nginx_config)
+        self.assertIn("try_files $uri $uri/ /index.html", nginx_config)
+        self.assertNotIn("proxy_pass", nginx_config)
+        self.assertNotIn("location /api", nginx_config)
+        self.assertNotIn("location /media", nginx_config)
+
+    def test_external_caddy_template_has_strict_media_allowlist(self) -> None:
+        deployment = (
+            REPOSITORY_ROOT / "docs" / "telegram-mini-app-deployment.md"
+        ).read_text()
+
         self.assertIn(
-            "@player_scripts path /media/video-stream.js /media/video-rtc.js",
-            caddyfile,
+            "@webapp_api path /api/webapp /api/webapp/*",
+            deployment,
         )
+        self.assertIn(
+            "@internal_webapp_api path /api/webapp/v1/media/authorize "
+            "/api/webapp/v1/media/authorize/*",
+            deployment,
+        )
+        self.assertIn("@blocked_api path /api /api/*", deployment)
+        self.assertIn("path /media/video-stream.js /media/video-rtc.js", deployment)
         for endpoint in (
             "ws",
             "stream[.]m3u8",
@@ -83,13 +132,17 @@ class MiniAppInfrastructureTests(unittest.TestCase):
             "init[.]mp4",
             "segment[.]m4s",
         ):
-            self.assertIn(endpoint, caddyfile)
-        self.assertIn("forward_auth api:8080", caddyfile)
-        self.assertIn("method GET HEAD", caddyfile)
-        self.assertIn("stream_timeout 10m", caddyfile)
-        self.assertIn("@blocked_media path /media /media/*", caddyfile)
-        self.assertNotIn("handle_path /media/api", caddyfile)
-        self.assertNotIn("\n\tlog {", caddyfile)
+            self.assertIn(endpoint, deployment)
+        self.assertIn("forward_auth MINIPC_LAN_IP:28080", deployment)
+        self.assertIn("reverse_proxy MINIPC_LAN_IP:21984", deployment)
+        self.assertIn("method GET HEAD", deployment)
+        self.assertIn("stream_timeout 10m", deployment)
+        self.assertIn("@blocked_media path /media /media/*", deployment)
+        self.assertNotIn("handle_path /media/api", deployment)
+
+        deploy_script = (REPOSITORY_ROOT / "scripts" / "deploy.sh").read_text()
+        self.assertIn("reverse_proxy_bind_is_safe", deploy_script)
+        self.assertIn("0.0.0.0|::|\"[::]\"", deploy_script)
 
     def test_runtime_secrets_are_excluded_from_build_context(self) -> None:
         patterns = set(

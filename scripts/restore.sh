@@ -71,7 +71,7 @@ tar -xzf "$backup_path" -C "$tmp_dir"
 timestamp="$(date -u +%Y%m%d-%H%M%S)"
 
 log "Stopping application services"
-compose stop miniapp-gateway >/dev/null 2>&1 || true
+compose stop miniapp-web >/dev/null 2>&1 || true
 compose stop api worker graph-worker audio-worker buffer retention go2rtc >/dev/null 2>&1 || true
 
 log "Saving current runtime files before restore"

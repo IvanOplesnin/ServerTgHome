@@ -48,6 +48,15 @@
 - `postgres` - основная БД.
 - `redis` - брокер Dramatiq.
 - `go2rtc` - RTSP/Tapo bridge и playback audio на камеры.
+- `miniapp-web` - static-only Nginx с React Telegram Mini App; запускается
+  профилем `miniapp`, не терминирует TLS и не проксирует API/media.
+
+Публичный HTTPS для Mini App обслуживает существующий Caddy на Raspberry Pi
+(`ssh raps`). В проекте не должно быть второго Caddy. Внешний Caddy проксирует
+static frontend на `18082`, FastAPI на trusted port `28080` и разрешенные
+go2rtc media маршруты на `21984` с `forward_auth` в FastAPI. Эти три порта
+должны быть доступны только с Raspberry Pi; локальные `18080/1984` остаются
+loopback, а WebRTC `8555/tcp+udp` идет напрямую на mini PC.
 
 ## Где искать код
 
@@ -181,6 +190,8 @@ ssh minipc
 - Home Assistant работает на этом же mini PC.
 - Zigbee2MQTT занимает порт `8080`.
 - ServerTgHome API опубликован как `18080:8080`.
+- Порт `18081` уже занят другим локальным сервисом; Mini App static upstream
+  использует `18082`.
 - Home Assistant должен обращаться к сервису по `http://127.0.0.1:18080`.
 - Контейнеры ServerTgHome ходят в Home Assistant через `http://host.docker.internal:8123`.
 - Docker Compose может предупреждать, что есть `compose.yaml` и `docker-compose.yml`; на mini PC это ожидаемо.
@@ -248,4 +259,3 @@ PY
 - `/videos` должен фильтровать записи, у которых файл уже удален retention.
 - Для опасных команд и voice playback проверять `admin_user_ids`.
 - Для новых камер нужно синхронно обновлять основной config, go2rtc config, topic mapping, panels и mini PC runtime config.
-

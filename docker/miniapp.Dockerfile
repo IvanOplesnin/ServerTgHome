@@ -9,11 +9,11 @@ COPY webapp/ ./
 RUN npm run build
 
 
-FROM caddy:2.11.4-alpine
+FROM nginxinc/nginx-unprivileged:1.28.1-alpine
 
-COPY docker/miniapp.Caddyfile /etc/caddy/Caddyfile
-RUN caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+COPY docker/miniapp.nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=frontend /build/dist /usr/share/nginx/html
 
-COPY --from=frontend /build/dist /srv
+RUN nginx -t
 
-EXPOSE 80 443
+EXPOSE 8080

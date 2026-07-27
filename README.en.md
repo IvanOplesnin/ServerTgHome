@@ -39,7 +39,8 @@ Docker Compose services:
 - `buffer`: long-running process that starts one `ffmpeg` process per buffered camera.
 - `retention`: APScheduler process for cleanup and camera health checks.
 - `go2rtc`: media gateway for Tapo two-way audio and RTSP restreams.
-- `miniapp-gateway`: Caddy HTTPS endpoint, Mini App static frontend and protected media proxy.
+- `miniapp-web`: static Telegram Mini App frontend; the existing Caddy on the
+  Raspberry Pi terminates HTTPS and proxies protected media.
 - `postgres`: persistent database for jobs, video/audio records and sensor history.
 - `redis`: Dramatiq broker.
 
@@ -96,10 +97,10 @@ Resources:
 
 Ports:
 
-- `80/tcp`, `443/tcp`: public Telegram Mini App HTTPS gateway.
-- `8555/tcp+udp`: public WebRTC media transport.
-- `18080/tcp`: Server Tg Home HTTP API, bound to `127.0.0.1`.
-- `1984/tcp`: go2rtc web/API, bound to `127.0.0.1` by compose.
+- `80/tcp`, `443/tcp`: Caddy on the Raspberry Pi, not this project stack.
+- `8555/tcp+udp`: public WebRTC media transport on the mini PC.
+- `18082/tcp`, `28080/tcp`, `21984/tcp`: trusted reverse-proxy upstreams;
+  local `18080/1984` stay bound to `127.0.0.1`.
 - `8554/tcp`: go2rtc RTSP inside the Docker network, not exposed to the host.
 
 See [docs/telegram-mini-app-deployment.md](docs/telegram-mini-app-deployment.md)
@@ -123,7 +124,7 @@ HOME_ASSISTANT_TOKEN=ha-long-lived-access-token
 POSTGRES_DB=server_tg_home
 POSTGRES_USER=server_tg_home
 POSTGRES_PASSWORD=change-this-password
-STH_PUBLIC_HOST=miniapp.example.com
+STH_REVERSE_PROXY_BIND_ADDRESS=127.0.0.1
 COMPOSE_PROFILES=miniapp
 ```
 
@@ -251,7 +252,7 @@ HOME_ASSISTANT_TOKEN=
 POSTGRES_DB=server_tg_home
 POSTGRES_USER=server_tg_home
 POSTGRES_PASSWORD=
-STH_PUBLIC_HOST=miniapp.example.com
+STH_REVERSE_PROXY_BIND_ADDRESS=127.0.0.1
 COMPOSE_PROFILES=miniapp
 ```
 
@@ -260,9 +261,11 @@ COMPOSE_PROFILES=miniapp
 - `STH_WEBHOOK_TOKEN`: token passed as `X-Webhook-Token`.
 - `HOME_ASSISTANT_TOKEN`: long-lived access token for commands like `/ac_on`.
 - `POSTGRES_*`: Postgres database, user and password.
-- `STH_PUBLIC_HOST`: public Mini App DNS name without `https://` or a path.
-- `COMPOSE_PROFILES=miniapp`: explicitly enables the HTTPS gateway and
-  publishes `80/443`; without it the existing service stack keeps its old behavior.
+- `STH_REVERSE_PROXY_BIND_ADDRESS`: mini PC interface for the Caddy upstreams
+  (`18082`, `28080`, `21984`). With Caddy on another host, use the mini PC
+  LAN/VPN address and allow it in the firewall only from the reverse proxy.
+- `COMPOSE_PROFILES=miniapp`: enables the static `miniapp-web` service.
+  The public HTTPS URL is configured in `webapp.public_url`.
 
 ### Main Sections
 

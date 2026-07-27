@@ -1,214 +1,312 @@
-# Публикация Telegram Mini App
+# Публикация Telegram Mini App через Caddy на Raspberry Pi
 
-Mini App публикуется через отдельный контейнер `miniapp-gateway`. Он собирает
-React-приложение в образе `node:24-alpine`, а затем отдает статические файлы и
-терминирует HTTPS через `caddy:2.11.4-alpine`.
+## Итоговая схема
+
+В проекте не запускается собственный Caddy и не публикуются `80/443`.
+Единственной публичной HTTPS-точкой остается существующий Caddy на Raspberry Pi
+(`ssh raps`). Контейнер `miniapp-web` на mini PC только собирает и отдает
+статический React frontend через непривилегированный Nginx.
 
 ```text
 Telegram WebView
     |
     | HTTPS :443
     v
-Caddy (miniapp-gateway)
-    |-- /                         -> статическая SPA
-    |-- /api/webapp/*             -> FastAPI
-    `-- только разрешенные media  -> go2rtc :1984
+Caddy на raps
+    |-- /                         -> mini PC :18082 (miniapp-web)
+    |-- /api/webapp/*             -> mini PC :28080 (FastAPI)
+    `-- разрешенные /media/*       -> mini PC :21984 (go2rtc)
+             |
+             `-- forward_auth     -> mini PC :28080
 
 WebRTC media plane
-Telegram WebView <---------- TCP/UDP :8555 ----------> go2rtc
+Telegram WebView <---------- TCP/UDP :8555 ----------> go2rtc на mini PC
 ```
 
-Публичный доступ к административному API go2rtc не нужен. Caddy пропускает
-только два JavaScript-файла плеера и короткий список media-маршрутов, защищенных
-короткоживущим ticket. Ticket можно повторно использовать в пределах его TTL:
-это нужно для HTTP Range и сегментов HLS. Все остальные запросы `/media/*`
-возвращают `404`.
-Стандартный access log Caddy отключён, потому что capability-ticket находится
-в URI; production-команда API также запускает Uvicorn с `--no-access-log`.
-Operational-ошибки обоих сервисов по-прежнему попадают в логи контейнеров.
-Из FastAPI наружу проксируется только префикс `/api/webapp/*`; webhook и
-служебные endpoints остаются на loopback-порту.
+Проверка инфраструктуры до применения этой ветки показала:
 
-## Порты и DNS
+- Caddy на `raps` уже запущен в Docker и занимает `80/443`;
+- он уже используется как центральный reverse proxy для сервисов mini PC;
+- FastAPI на `18080` доступен из контейнера Caddy;
+- go2rtc на `1984` пока привязан к loopback mini PC и недоступен с `raps`.
 
-На роутере нужно направить на mini PC:
+## Порты
 
-| Порт | Протокол | Назначение |
+На роутере:
+
+| Порт | Куда направить | Назначение |
 |---|---|---|
-| `80` | TCP | ACME challenge и перенаправление на HTTPS |
-| `443` | TCP | Mini App, API и WebSocket signaling |
-| `8555` | TCP и UDP | прямой WebRTC media transport go2rtc |
+| `80/tcp` | Raspberry Pi | ACME и перенаправление на HTTPS |
+| `443/tcp` | Raspberry Pi | Mini App, API, MSE/HLS и WebSocket signaling |
+| `8555/tcp+udp` | mini PC | прямой WebRTC media transport go2rtc |
 
-Не нужно публиковать:
+Публичная DNS `A`-запись домена должна указывать на статический внешний IP.
+Если роутер не поддерживает NAT loopback, настройте split DNS: внутри домашней
+сети тот же домен должен разрешаться в LAN-адрес Raspberry Pi. Публичный
+WebRTC candidate при этом по-прежнему направляется через `8555` на mini PC.
 
-| Порт | Доступ |
+Только между доверенным Caddy и mini PC:
+
+| Порт | Сервис |
 |---|---|
-| `18080/tcp` | FastAPI, только `127.0.0.1` хоста |
-| `1984/tcp` | go2rtc HTTP/API, только `127.0.0.1` хоста и Docker network |
-| `8554/tcp` | go2rtc RTSP, только Docker network |
-| `5432`, `6379` | только Docker network |
+| `18082/tcp` | статический `miniapp-web` |
+| `28080/tcp` | trusted proxy port FastAPI |
+| `21984/tcp` | trusted proxy port go2rtc HTTP/WebSocket API |
 
-Создайте DNS `A`-запись поддомена на статический публичный IPv4. Самый простой
-вариант — обычная DNS-запись без CDN proxy: WebRTC на `8555/tcp+udp` все равно
-должен идти напрямую на mini PC. Если `80` или `443` уже занят другим reverse
-proxy, нельзя запускать второй listener на том же адресе: перенесите маршруты из
-`docker/miniapp.Caddyfile` в существующий gateway.
+Порты `18082`, `28080` и `21984` нельзя пробрасывать на интернет. Привяжите их
+к LAN/VPN-адресу mini PC и ограничьте firewall так, чтобы подключения
+принимались только от адреса Raspberry Pi. Локальные порты `18080` и `1984`
+по-прежнему публикуются только на `127.0.0.1` для Home Assistant и диагностики.
+Для Docker-портов firewall-правило должно применяться до Docker forwarding,
+например в `DOCKER-USER`/nftables; одной привязки к LAN интерфейсу недостаточно
+для изоляции от остальных устройств локальной сети.
 
-## Runtime-настройка
+## Runtime-настройка mini PC
 
-Не копируйте реальные значения в репозиторий. В `.env` на сервере укажите имя
-хоста без схемы и пути:
+В реальном `.env` mini PC:
 
 ```dotenv
-STH_PUBLIC_HOST=miniapp.example.com
+# LAN/VPN-адрес mini PC, доступный с raps. Не использовать 0.0.0.0.
+STH_REVERSE_PROXY_BIND_ADDRESS=<MINIPC_LAN_IP>
 COMPOSE_PROFILES=miniapp
 ```
 
-Профиль нужен намеренно: пока `COMPOSE_PROFILES` не содержит `miniapp`,
-gateway не запускается и не занимает `80/443`. Это позволяет сначала проверить
-занятые порты и существующий reverse proxy, а затем явно включить публикацию.
+Если reverse proxy находится на том же хосте, оставьте безопасное значение
+`127.0.0.1`. `STH_REVERSE_PROXY_BIND_ADDRESS` используется только для
+`18082`, `28080` и `21984`; локальные `18080/1984` и публичный WebRTC
+`8555/tcp+udp` настраиваются отдельно.
 
-В `config/config.yaml` URL должен соответствовать этому хосту:
+В `config/config.yaml`:
 
 ```yaml
 telegram:
-  # Полный доступ администратора; существующие опасные Telegram-команды
-  # по-прежнему проверяют этот же список.
   admin_user_ids:
     - 111111111
 
 webapp:
   enabled: true
   public_url: "https://miniapp.example.com"
-  # ID основной supergroup начинается с -100.
   primary_chat_id: -1001234567890
-  # Наблюдатели получают только чтение Mini App.
   viewer_user_ids:
     - 222222222
   require_group_membership: true
   membership_recheck_sec: 300
 ```
 
-Администраторы получают роль `admin`. Остальные пользователи должны быть
-одновременно перечислены в `viewer_user_ids` и состоять в `primary_chat_id`;
-пустой allowlist никому случайно доступ не открывает. Чтобы `getChatMember`
-надежно проверял других участников, добавьте бота администратором основной
-группы. Наблюдателям доступны только трансляции, архив, скачивание и климат;
-управляющие действия остаются за администраторами. Членство повторно
-проверяется с интервалом `membership_recheck_sec`, включая обращения по уже
-выданным media/file tickets. Постоянное media-соединение ограничено десятью
-минутами, а frontend переподключается заранее: это не дает уже открытому
-WebSocket обходить последующие проверки доступа до конца часового ticket.
+Администраторы берутся из существующего `telegram.admin_user_ids`.
+Наблюдатель должен одновременно находиться в `viewer_user_ids` и оставаться
+участником `primary_chat_id`. Пустой allowlist доступ не открывает. Для надежной
+проверки `getChatMember` бот должен быть администратором основной группы.
 
-В runtime `config/go2rtc.yaml` оставьте listener и замените TEST-NET адрес из
-example-файла на статический публичный IPv4:
+В runtime `config/go2rtc.yaml` замените TEST-NET адрес из example-файла на
+статический публичный IPv4:
 
 ```yaml
 webrtc:
   listen: ":8555"
   candidates:
-    - 203.0.113.10:8555  # пример; заменить на реальный адрес только на сервере
+    - 203.0.113.10:8555  # пример; заменить только в runtime-конфиге
 ```
 
-Проверьте, что `entrance`, `living` и `bed` объявлены одновременно в
-`config/config.yaml` и `config/go2rtc.yaml`, а `go2rtc_stream` каждой камеры
-совпадает с именем stream.
+Камеры `entrance`, `living` и `bed` должны существовать одновременно в
+`config/config.yaml` и `config/go2rtc.yaml`; `go2rtc_stream` должен совпадать с
+именем соответствующего stream.
 
-Если на mini PC используется отдельный runtime `compose.yaml`, перенесите в него
-сервис `miniapp-gateway`, volumes Caddy и безопасные port bindings из
-`docker-compose.yml`. Docker Compose предпочтет `compose.yaml`, поэтому одного
-изменения репозиторного `docker-compose.yml` в этом случае недостаточно.
+На mini PC используется отдельный runtime `compose.yaml`. В него нужно перенести
+из репозиторного `docker-compose.yml`:
 
-После ручной правки bind-mounted `config/config.yaml` или
-`config/go2rtc.yaml` пересоздайте использующие их контейнеры явно:
+- сервис `miniapp-web`;
+- отдельные trusted proxy mappings `28080:8080` и `21984:1984` с
+  `STH_REVERSE_PROXY_BIND_ADDRESS`;
+- заменить прежний `18080:8080` или `0.0.0.0:18080:8080` на
+  `127.0.0.1:18080:8080`, иначе полный API останется доступен всей LAN;
+- оставить локальный go2rtc mapping только как `127.0.0.1:1984:1984`;
+- публикацию `8555/tcp+udp`;
+- `--no-access-log` для API.
+
+Целевой фрагмент port mappings:
+
+```yaml
+go2rtc:
+  ports:
+    - "127.0.0.1:1984:1984"
+    - "${STH_REVERSE_PROXY_BIND_ADDRESS}:21984:1984"
+    - "8555:8555/tcp"
+    - "8555:8555/udp"
+
+api:
+  ports:
+    - "127.0.0.1:18080:8080"
+    - "${STH_REVERSE_PROXY_BIND_ADDRESS}:28080:8080"
+
+miniapp-web:
+  ports:
+    - "${STH_REVERSE_PROXY_BIND_ADDRESS}:18082:8080"
+```
+
+После изменения:
 
 ```bash
-docker compose up -d --force-recreate api go2rtc buffer miniapp-gateway
+docker compose --profile miniapp config --quiet
+docker compose --profile miniapp up -d --build --force-recreate \
+  miniapp-web api go2rtc buffer
 ```
 
-Для открытия приложения из домашней сети роутер должен поддерживать NAT
-loopback. Если его нет, настройте split DNS: публичное имя Mini App внутри LAN
-должно разрешаться в локальный адрес mini PC. Для WebRTC candidate при этом
-может потребоваться оставить одновременно публичный и локальный адреса.
+## Маршруты для существующего Caddy
 
-## Запуск и проверка
+Ниже шаблон отдельного публичного site block для Caddy на `raps`.
+Замените домен и `MINIPC_LAN_IP`. Не добавляйте используемый для внутренних
+сервисов `import local_only`: Telegram должен открывать Mini App из внешней сети.
 
-Перед первым запуском:
+```caddyfile
+miniapp.example.com {
+	encode zstd gzip
+
+	header {
+		-Server
+		Content-Security-Policy "default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self' wss://miniapp.example.com; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors https://telegram.org https://*.telegram.org"
+		Permissions-Policy "camera=(), geolocation=(), microphone=()"
+		Referrer-Policy "no-referrer"
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+	}
+
+	@immutable path /assets/*
+	header @immutable Cache-Control "public, max-age=31536000, immutable"
+
+	@internal_webapp_api path /api/webapp/v1/media/authorize /api/webapp/v1/media/authorize/*
+	handle @internal_webapp_api {
+		respond "Not Found" 404
+	}
+
+	@webapp_api path /api/webapp /api/webapp/*
+	handle @webapp_api {
+		reverse_proxy MINIPC_LAN_IP:28080
+	}
+
+	@blocked_api path /api /api/*
+	handle @blocked_api {
+		respond "Not Found" 404
+	}
+
+	@player_scripts {
+		method GET HEAD
+		path /media/video-stream.js /media/video-rtc.js
+	}
+	handle @player_scripts {
+		uri strip_prefix /media
+		header Cache-Control "public, max-age=86400"
+		reverse_proxy MINIPC_LAN_IP:21984
+	}
+
+	@protected_media {
+		method GET HEAD
+		path_regexp protected_media ^/media/t/[A-Za-z0-9_-]{32,256}(?P<upstream>/api/(?:ws|stream[.]m3u8|hls/(?:playlist[.]m3u8|segment[.]ts|init[.]mp4|segment[.]m4s)))$
+	}
+	handle @protected_media {
+		route {
+			forward_auth MINIPC_LAN_IP:28080 {
+				uri /api/webapp/v1/media/authorize
+			}
+			rewrite * {re.protected_media.upstream}
+			header Cache-Control "no-store"
+			reverse_proxy MINIPC_LAN_IP:21984 {
+				stream_timeout 10m
+			}
+		}
+	}
+
+	@blocked_media path /media /media/*
+	handle @blocked_media {
+		respond "Not Found" 404
+	}
+
+	handle {
+		reverse_proxy MINIPC_LAN_IP:18082
+	}
+}
+```
+
+Этот allowlist открывает только:
+
+- два JavaScript-модуля плеера;
+- `/api/ws`;
+- `/api/stream.m3u8`;
+- нужные playlist/segment endpoints HLS.
+
+Остальной go2rtc API остается закрытым. Перед каждым новым media-соединением
+Caddy обращается к FastAPI, который проверяет ticket, разрешенную камеру,
+allowlist пользователя и членство в группе. Постоянный WebSocket ограничен
+десятью минутами, а frontend обновляет ticket и переподключается заранее.
+
+Capability-ticket находится в URL. Не включайте access log для
+`/media/t/*` и `/api/webapp/v1/files/*`. В проекте Uvicorn и `miniapp-web`
+уже запускаются без access log.
+
+## Безопасное обновление Caddy на raps
+
+Перед ручным изменением сделайте резервную копию Caddyfile. Затем проверьте
+конфигурацию внутри уже запущенного контейнера:
 
 ```bash
-docker compose config --quiet
-docker compose build miniapp-gateway
-docker compose up -d
-docker compose ps
+ssh raps
+cd <CADDY_COMPOSE_DIR>
+docker compose exec -T caddy \
+  caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+docker compose exec -T caddy \
+  caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 ```
 
-Caddy получает публичный TLS-сертификат автоматически. DNS уже должен указывать
-на сервер, а входящие `80/tcp` и `443/tcp` должны быть доступны. Проверки:
+Если менялся только bind-mounted Caddyfile, пересобирать образ не нужно.
+Если менялись volumes или networks в compose Caddy, выполните
+`docker compose up -d --force-recreate caddy`.
+
+## Проверка
+
+С mini PC:
 
 ```bash
 curl -fsS http://127.0.0.1:18080/health
+docker compose --profile miniapp ps
+```
+
+С Raspberry Pi нужно проверить три внутренних upstream без вывода ответов:
+
+```bash
+curl -fsS -o /dev/null http://MINIPC_LAN_IP:18082/healthz
+curl -fsS -o /dev/null http://MINIPC_LAN_IP:28080/health
+curl -fsS -o /dev/null http://MINIPC_LAN_IP:21984/
+```
+
+С внешнего клиента:
+
+```bash
 curl -I https://miniapp.example.com/
-docker compose logs --tail=100 miniapp-gateway go2rtc api
 ```
 
-Затем зарегистрируйте точный HTTPS URL Mini App в BotFather. Приложение в
-группе открывается обычной ссылкой бота с параметром `startapp`; кнопки
-`web_app` в inline-клавиатуре предназначены для личного чата. После перезапуска
-бот добавит ссылку в существующие панели камер и климата, а команда `/app`
-создаст отдельную общую панель в текущем топике.
-
-## Как защищена трансляция
-
-Frontend сначала получает короткоживущий opaque ticket от FastAPI. Ticket
-находится в пути, например:
-
-```text
-/media/t/<ticket>/api/ws?src=entrance
-```
-
-Перед проксированием Caddy вызывает
-`/api/webapp/v1/media/authorize`. Только после успешной проверки он удаляет
-ticket-префикс и отправляет разрешенный маршрут в go2rtc. Это также сохраняет
-ticket во вложенных HLS URL, где query-параметр исходного WebSocket был бы
-потерян.
-
-Allowlist содержит только:
-
-- `/api/ws`;
-- `/api/stream.m3u8`;
-- `/api/hls/playlist.m3u8`;
-- `/api/hls/segment.ts`;
-- `/api/hls/init.mp4`;
-- `/api/hls/segment.m4s`.
-
-Web UI, управление streams, конфигурация и прочие endpoints go2rtc через
-публичный gateway недоступны.
+После этого зарегистрируйте точный HTTPS URL в BotFather. В групповом чате
+команда `/app` публикует общую панель; панели камер и климата также получают
+ссылку на Mini App.
 
 ## Нужен ли proxy
 
 `TELEGRAM_PROXY_URL` относится только к исходящим запросам бота к Telegram API.
-Если mini PC напрямую соединяется с Telegram, оставьте его пустым. Этот proxy не
-публикует Mini App и не заменяет домен, HTTPS или port forwarding.
+Если mini PC соединяется с Telegram напрямую, оставьте proxy пустым. Он не
+публикует Mini App и не заменяет Caddy, DNS или port forwarding.
 
-Для Mini App нужен доступ пользователей к вашему HTTPS-домену. Если конкретная
-сеть не пропускает Telegram API, proxy можно включить только для бота. Если сеть
-не дает прямой WebRTC даже при открытом `8555`, следующий вариант расширения —
-TURN-сервер; обычный HTTP/SOCKS proxy эту задачу не решает.
-
-CDN proxy для DNS-записи не обязателен. При статическом IP проще оставить
-обычную `A`-запись: HTTPS идет прямо в Caddy, а `8555/tcp+udp` — прямо в
-go2rtc. Даже при использовании CDN медиапорт все равно нельзя провести через
-обычный HTTP proxy.
+Обычный HTTP/SOCKS proxy также не передает WebRTC. Если прямой WebRTC на `8555`
+недоступен, плеер пробует MSE/HLS через HTTPS `443`; TURN можно добавить позже
+как отдельный media transport.
 
 ## Диагностика
 
-- Сертификат не выпускается: проверить DNS, NAT для `80/443` и отсутствие
-  другого процесса на этих портах.
-- SPA открывается, но API отвечает `401/403`: проверить Telegram init data,
-  allowlist пользователей и членство в основной группе.
-- WebSocket получает `401/404`: проверить время жизни stream ticket и совпадение
+- SPA не открывается: проверить `miniapp-web:18082`, site block и DNS.
+- API отвечает `401/403`: проверить Telegram init data, allowlist и членство в
+  основной группе.
+- Caddy получает `502` на media: `21984` не привязан к доступному с `raps`
+  интерфейсу либо заблокирован firewall.
+- WebSocket получает `401/404`: проверить ticket и соответствие
   `go2rtc_stream`.
-- WebRTC не соединяется извне: проверить оба протокола `8555`, публичный
-  candidate и firewall; MSE/HLS останутся HTTPS fallback.
-- Не открывать `1984` «для проверки» в интернет. Используйте
-  `http://127.0.0.1:1984` только локально или `docker compose exec`.
+- WebRTC не соединяется: проверить оба протокола `8555`, public candidate и
+  перенаправление порта на mini PC.
+- Никогда не открывать `18082`, `28080` или `21984` в интернет.

@@ -233,7 +233,7 @@ HOME_ASSISTANT_TOKEN=
 POSTGRES_DB=server_tg_home
 POSTGRES_USER=server_tg_home
 POSTGRES_PASSWORD=$postgres_password
-STH_PUBLIC_HOST=
+STH_REVERSE_PROXY_BIND_ADDRESS=127.0.0.1
 COMPOSE_PROFILES=
 EOF
     chmod 600 "$APP_DIR/.env"
@@ -257,8 +257,11 @@ stack_running() {
 }
 
 deploy_stack() {
-  if miniapp_profile_requested && ! compose_service_defined miniapp-gateway; then
-    die "COMPOSE_PROFILES enables miniapp, but the active runtime compose file has no miniapp-gateway service"
+  if miniapp_profile_requested && ! compose_service_defined miniapp-web; then
+    die "COMPOSE_PROFILES enables miniapp, but the active runtime compose file has no miniapp-web service"
+  fi
+  if miniapp_profile_requested && ! reverse_proxy_bind_is_safe; then
+    die "STH_REVERSE_PROXY_BIND_ADDRESS must be a specific loopback, LAN or VPN address, not a wildcard"
   fi
 
   if [ "$RUNTIME_FILES_CREATED" = "1" ] && [ "$START_WITH_NEW_CONFIG" != "1" ]; then
@@ -311,26 +314,32 @@ check_health() {
     log "API health check did not pass yet. Check logs with: $APP_DIR/scripts/deploy.sh logs"
   fi
 
-  if compose_service_active miniapp-gateway; then
-    local public_host gateway_ready
-    public_host="$(runtime_env_value STH_PUBLIC_HOST)"
-    gateway_ready=0
-    if [ -z "$public_host" ] || [ "$public_host" = "localhost" ]; then
-      log "Mini App gateway is enabled, but STH_PUBLIC_HOST is not configured"
-      return
-    fi
-
-    log "Waiting for Mini App HTTPS: https://$public_host/"
+  if compose_service_active miniapp-web; then
+    local public_url static_ready static_url
+    static_url="$(miniapp_static_health_url)"
+    static_ready=0
+    log "Waiting for Mini App static service: $static_url"
     for _ in $(seq 1 30); do
-      if curl -fsS --max-time 5 "https://$public_host/" >/dev/null 2>&1; then
-        log "Mini App HTTPS is healthy"
-        gateway_ready=1
+      if curl -fsS --max-time 5 "$static_url" >/dev/null 2>&1; then
+        log "Mini App static service is healthy"
+        static_ready=1
         break
       fi
       sleep 2
     done
-    if [ "$gateway_ready" != "1" ]; then
-      log "Mini App HTTPS check did not pass yet. Check DNS, ports 80/443 and gateway logs."
+    if [ "$static_ready" != "1" ]; then
+      log "Mini App static service did not become healthy. Check miniapp-web logs."
+    fi
+
+    public_url="$(runtime_webapp_public_url)"
+    if [ -n "$public_url" ]; then
+      if curl -fsS --max-time 5 "$public_url/" >/dev/null 2>&1; then
+        log "External Mini App HTTPS is healthy"
+      else
+        log "External Mini App HTTPS is unavailable. Check the trusted reverse proxy, DNS and firewall."
+      fi
+    else
+      log "webapp.public_url is not configured"
     fi
     if ! compose ps --status running --services 2>/dev/null | grep -qx go2rtc; then
       log "go2rtc is not running; live video will be unavailable"
@@ -501,26 +510,42 @@ compose_service_defined() {
   compose --profile miniapp config --services 2>/dev/null | grep -qx "$service"
 }
 
-runtime_webapp_public_host() {
+runtime_webapp_public_url() {
   awk '
     $1 == "webapp:" { in_webapp = 1; next }
     in_webapp && /^[^[:space:]]/ { in_webapp = 0 }
     in_webapp && $1 == "public_url:" {
       value = $2
       gsub(/"/, "", value)
-      sub(/^https:\/\//, "", value)
-      sub(/\/.*$/, "", value)
-      print value
+      sub(/\/$/, "", value)
+      if (value ~ /^https:\/\//) {
+        print value
+      }
       exit
     }
   ' "$APP_DIR/config/config.yaml"
 }
 
-miniapp_hosts_match() {
-  local configured_host public_host
-  public_host="$(runtime_env_value STH_PUBLIC_HOST)"
-  configured_host="$(runtime_webapp_public_host)"
-  [ -n "$public_host" ] && [ "$public_host" = "$configured_host" ]
+runtime_webapp_has_public_url() {
+  [ -n "$(runtime_webapp_public_url)" ]
+}
+
+miniapp_static_health_url() {
+  local bind_address
+  bind_address="$(runtime_env_value STH_REVERSE_PROXY_BIND_ADDRESS)"
+  [ -n "$bind_address" ] || bind_address=127.0.0.1
+  printf 'http://%s:18082/healthz' "$bind_address"
+}
+
+reverse_proxy_bind_is_safe() {
+  local bind_address
+  bind_address="$(runtime_env_value STH_REVERSE_PROXY_BIND_ADDRESS)"
+  case "$bind_address" in
+    0.0.0.0|::|"[::]")
+      return 1
+      ;;
+  esac
+  return 0
 }
 
 git_worktree_clean() {
@@ -558,15 +583,14 @@ show_doctor() {
   doctor_file "$APP_DIR/config/config.yaml"
   doctor_file "$APP_DIR/config/go2rtc.yaml"
   doctor_file "$APP_DIR/docker-compose.yml"
-  if [ -f "$APP_DIR/.env" ]; then
-    doctor_check "STH_PUBLIC_HOST is configured" runtime_env_has_value STH_PUBLIC_HOST
-  fi
 
   if [ -f "$APP_DIR/docker-compose.yml" ]; then
     doctor_check "docker compose config is valid" bash -c "cd '$APP_DIR' && docker compose config --quiet"
-    doctor_check "runtime compose defines miniapp-gateway" compose_service_defined miniapp-gateway
-    if compose_service_active miniapp-gateway; then
-      doctor_check "STH_PUBLIC_HOST matches webapp.public_url" miniapp_hosts_match
+    if miniapp_profile_requested; then
+      doctor_check "STH_REVERSE_PROXY_BIND_ADDRESS is configured" runtime_env_has_value STH_REVERSE_PROXY_BIND_ADDRESS
+      doctor_check "STH_REVERSE_PROXY_BIND_ADDRESS is not a wildcard" reverse_proxy_bind_is_safe
+      doctor_check "webapp.public_url is configured" runtime_webapp_has_public_url
+      doctor_check "runtime compose defines miniapp-web" compose_service_defined miniapp-web
     fi
     log "Compose services:"
     compose ps 2>/dev/null || true

@@ -39,7 +39,8 @@ Server Tg Home - локальный сервис для связки Home Assist
 - `buffer`: долгоживущий процесс, который запускает по одному `ffmpeg` на каждую камеру с `buffer_enabled: true`.
 - `retention`: APScheduler-процесс для очистки видео, аудио, графиков, истории датчиков и healthcheck камер.
 - `go2rtc`: media gateway для Tapo two-way audio и restream RTSP.
-- `miniapp-gateway`: Caddy с HTTPS, статической сборкой Telegram Mini App и защищенным media proxy.
+- `miniapp-web`: статическая сборка Telegram Mini App; HTTPS и media proxy
+  выполняет существующий Caddy на Raspberry Pi.
 - `postgres`: БД задач, статусов, видео, аудио и истории датчиков.
 - `redis`: брокер очередей Dramatiq.
 
@@ -107,10 +108,10 @@ webapp/           React/TypeScript frontend Telegram Mini App.
 
 Открытые порты:
 
-- `80/tcp`, `443/tcp`: публичный HTTPS gateway Telegram Mini App.
-- `8555/tcp+udp`: публичный WebRTC media transport.
-- `18080/tcp`: HTTP API Server Tg Home, опубликован только на `127.0.0.1`.
-- `1984/tcp`: go2rtc web/API, в compose опубликован только на `127.0.0.1`.
+- `80/tcp`, `443/tcp`: Caddy на Raspberry Pi, не контейнер этого проекта.
+- `8555/tcp+udp`: публичный WebRTC media transport на mini PC.
+- `18082/tcp`, `28080/tcp`, `21984/tcp`: только между доверенным Caddy и
+  mini PC; локальные `18080/1984` остаются на `127.0.0.1`.
 - `8554/tcp`: RTSP go2rtc внутри Docker network, наружу не опубликован.
 
 Подробная схема DNS, TLS, port forwarding и media allowlist:
@@ -134,7 +135,7 @@ HOME_ASSISTANT_TOKEN=ha-long-lived-access-token
 POSTGRES_DB=server_tg_home
 POSTGRES_USER=server_tg_home
 POSTGRES_PASSWORD=change-this-password
-STH_PUBLIC_HOST=miniapp.example.com
+STH_REVERSE_PROXY_BIND_ADDRESS=127.0.0.1
 COMPOSE_PROFILES=miniapp
 ```
 
@@ -292,7 +293,7 @@ HOME_ASSISTANT_TOKEN=
 POSTGRES_DB=server_tg_home
 POSTGRES_USER=server_tg_home
 POSTGRES_PASSWORD=
-STH_PUBLIC_HOST=miniapp.example.com
+STH_REVERSE_PROXY_BIND_ADDRESS=127.0.0.1
 COMPOSE_PROFILES=miniapp
 ```
 
@@ -301,9 +302,11 @@ COMPOSE_PROFILES=miniapp
 - `STH_WEBHOOK_TOKEN`: токен для HTTP webhook/API. В Home Assistant передается в `X-Webhook-Token`.
 - `HOME_ASSISTANT_TOKEN`: long-lived access token Home Assistant для команд вроде `/ac_on`.
 - `POSTGRES_*`: имя БД, пользователь и пароль Postgres.
-- `STH_PUBLIC_HOST`: публичное DNS-имя Mini App без `https://` и пути.
-- `COMPOSE_PROFILES=miniapp`: явно включает HTTPS gateway и публикацию
-  `80/443`; без профиля остальной стек продолжает работать как раньше.
+- `STH_REVERSE_PROXY_BIND_ADDRESS`: интерфейс mini PC для внутренних upstream
+  Caddy (`18082`, `28080`, `21984`). Для внешнего Raspberry Pi укажите LAN/VPN
+  адрес mini PC и разрешите доступ firewall только с reverse proxy.
+- `COMPOSE_PROFILES=miniapp`: включает статический сервис `miniapp-web`.
+  HTTPS-домен задается в `webapp.public_url`.
 
 ### `app`
 
