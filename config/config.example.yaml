@@ -51,6 +51,28 @@ telegram:
   request_timeout_sec: 180
   polling_timeout_sec: 30
 
+webapp:
+  enabled: false
+  public_url: "https://home.example.com"
+  primary_chat_id: null
+  # Read-only Mini App users. Administrators are taken from telegram.admin_user_ids.
+  # An empty list grants access to nobody except explicitly configured administrators.
+  viewer_user_ids: []
+  require_group_membership: true
+  auth_max_age_sec: 300
+  session_ttl_sec: 3600
+  tabs:
+    - id: "cameras"
+      title: "Камеры"
+      kind: "cameras"
+      enabled: true
+      required_role: "viewer"
+    - id: "climate"
+      title: "Климат"
+      kind: "climate"
+      enabled: true
+      required_role: "viewer"
+
 home_assistant:
   base_url: "http://homeassistant.local:8123"
   token: "${HOME_ASSISTANT_TOKEN:-}"
@@ -124,6 +146,8 @@ buffer:
 
 cameras:
   entrance:
+    title: "Входная дверь"
+    web_enabled: true
     rtsp_url: "rtsp://user:password@192.168.1.10:554/stream1"
     ffmpeg_url: null
     buffer_enabled: true
@@ -165,6 +189,8 @@ cameras:
       - "-movflags"
       - "+faststart"
   living:
+    title: "Гостиная"
+    web_enabled: true
     rtsp_url: "rtsp://user:password@192.168.1.26:554/stream1"
     ffmpeg_url: "rtsp://go2rtc:8554/living"
     buffer_enabled: true

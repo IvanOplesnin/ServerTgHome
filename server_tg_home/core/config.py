@@ -4,9 +4,10 @@ import os
 import re
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit, urlunsplit
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -58,6 +59,92 @@ class TelegramConfig(BaseModel):
     camera_topics: dict[str, TelegramCameraTopicConfig] = Field(default_factory=dict)
     request_timeout_sec: int = 180
     polling_timeout_sec: int = 30
+
+
+class WebAppTabConfig(BaseModel):
+    id: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
+    title: str = Field(min_length=1, max_length=80)
+    kind: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
+    enabled: bool = True
+    required_role: Literal["viewer", "admin"] = "viewer"
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def normalize_title(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
+
+
+def _default_webapp_tabs() -> list[WebAppTabConfig]:
+    return [
+        WebAppTabConfig(id="cameras", title="Камеры", kind="cameras"),
+        WebAppTabConfig(id="climate", title="Климат", kind="climate"),
+    ]
+
+
+class WebAppConfig(BaseModel):
+    enabled: bool = False
+    public_url: str | None = None
+    primary_chat_id: int | None = None
+    viewer_user_ids: list[int] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("viewer_user_ids", "allowed_user_ids"),
+    )
+    require_group_membership: bool = True
+    auth_max_age_sec: int = Field(default=300, ge=30, le=86_400)
+    session_ttl_sec: int = Field(default=3600, ge=60, le=2_592_000)
+    tabs: list[WebAppTabConfig] = Field(default_factory=_default_webapp_tabs)
+
+    @field_validator("public_url")
+    @classmethod
+    def normalize_public_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        parsed = urlsplit(normalized)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise ValueError("webapp.public_url must be an absolute HTTPS URL")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("webapp.public_url must not contain credentials")
+        try:
+            parsed.port
+        except ValueError as exc:
+            raise ValueError("webapp.public_url contains an invalid port") from exc
+        if parsed.query or parsed.fragment:
+            raise ValueError("webapp.public_url must not contain query parameters or a fragment")
+        return urlunsplit(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path.rstrip("/"),
+                "",
+                "",
+            )
+        )
+
+    @field_validator("viewer_user_ids")
+    @classmethod
+    def validate_viewer_user_ids(cls, value: list[int]) -> list[int]:
+        if any(user_id <= 0 for user_id in value):
+            raise ValueError("webapp.viewer_user_ids must contain positive Telegram user ids")
+        if len(value) != len(set(value)):
+            raise ValueError("webapp.viewer_user_ids must not contain duplicates")
+        return value
+
+    @field_validator("tabs")
+    @classmethod
+    def require_unique_tab_ids(cls, value: list[WebAppTabConfig]) -> list[WebAppTabConfig]:
+        tab_ids = [tab.id for tab in value]
+        if len(tab_ids) != len(set(tab_ids)):
+            raise ValueError("webapp.tabs must not contain duplicate ids")
+        return value
+
+    @model_validator(mode="after")
+    def require_public_url_when_enabled(self) -> WebAppConfig:
+        if self.enabled and self.public_url is None:
+            raise ValueError("webapp.public_url is required when the Mini App is enabled")
+        return self
 
 
 class HomeAssistantConfig(BaseModel):
@@ -157,6 +244,8 @@ class BufferConfig(BaseModel):
 
 class CameraConfig(BaseModel):
     rtsp_url: str
+    title: str | None = None
+    web_enabled: bool = False
     ffmpeg_url: str | None = None
     buffer_enabled: bool = True
     speaker_enabled: bool = False
@@ -223,6 +312,7 @@ class Settings(BaseSettings):
     app: AppConfig = Field(default_factory=AppConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
+    webapp: WebAppConfig = Field(default_factory=WebAppConfig)
     home_assistant: HomeAssistantConfig = Field(default_factory=HomeAssistantConfig)
     temperatures: TemperaturesConfig = Field(default_factory=TemperaturesConfig)
     graphs: GraphsConfig = Field(default_factory=GraphsConfig)
