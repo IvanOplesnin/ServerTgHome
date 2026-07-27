@@ -28,14 +28,24 @@ class MiniAppInfrastructureTests(unittest.TestCase):
         self.assertTrue(
             all(settings.cameras[camera_id].web_enabled for camera_id in camera_ids)
         )
+        expected_streams = {
+            "entrance": "entrance_web",
+            "living": "living",
+            "bed": "bed",
+        }
         self.assertEqual(
             {
-                settings.cameras[camera_id].go2rtc_stream
+                camera_id: settings.cameras[camera_id].go2rtc_stream
                 for camera_id in camera_ids
             },
-            camera_ids,
+            expected_streams,
         )
         self.assertTrue(camera_ids.issubset(go2rtc["streams"]))
+        self.assertIn("entrance_web", go2rtc["streams"])
+        self.assertIn(
+            "#video=h264#width=1920#height=-2#audio=aac",
+            go2rtc["streams"]["entrance_web"][0],
+        )
         self.assertEqual(go2rtc["webrtc"]["listen"], ":8555")
 
     def test_compose_uses_external_reverse_proxy_bindings(self) -> None:

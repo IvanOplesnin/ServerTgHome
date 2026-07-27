@@ -54,10 +54,10 @@ def capture_rtsp_clip(
         camera_input_url(camera),
         "-t",
         str(duration_sec),
-        *camera.ffmpeg_output_args,
+        *camera.ffmpeg_clip_output_args,
         str(output_path),
     ]
-    _run_ffmpeg(command, timeout_sec=max(duration_sec + 60, 90))
+    _run_ffmpeg(command, timeout_sec=max(duration_sec * 4 + 60, 120))
 
 
 def start_rtsp_clip_capture(

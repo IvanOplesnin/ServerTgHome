@@ -14,6 +14,11 @@ const loadedScripts = new Map<string, Promise<void>>();
 const MAX_TICKET_REFRESH_DELAY_MS = 9 * 60 * 1000;
 const MIN_TICKET_REFRESH_DELAY_MS = 5 * 1000;
 const TICKET_REFRESH_MARGIN_MS = 30 * 1000;
+const LIVE_START_TIMEOUT_MS = 45 * 1000;
+
+interface MountedPlayer {
+  dispose: () => void;
+}
 
 function normalizedPlayerScript(ticket: StreamTicket): string {
   const candidate = ticket.player_script_url ?? "/media/video-stream.js";
@@ -61,7 +66,28 @@ function ticketRefreshDelay(ticket: StreamTicket): number {
   );
 }
 
-function mountGo2RtcPlayer(container: HTMLDivElement, ticket: StreamTicket): () => void {
+function supportsNativeHls(): boolean {
+  const video = document.createElement("video");
+  return Boolean(
+    video.canPlayType("application/vnd.apple.mpegurl") ||
+      video.canPlayType("application/x-mpegURL"),
+  );
+}
+
+function liveMediaError(video: HTMLVideoElement): string {
+  if (video.error?.code === 3 || video.error?.code === 4) {
+    return "Встроенный плеер Telegram не поддерживает формат этого потока.";
+  }
+  return "Соединение с камерой прервано. Попробуйте подключиться ещё раз.";
+}
+
+function mountGo2RtcPlayer(
+  container: HTMLDivElement,
+  ticket: StreamTicket,
+  onReady: () => void,
+  onPlaying: () => void,
+  onError: (message: string) => void,
+): MountedPlayer {
   const url = streamUrl(ticket);
   if (!url) {
     throw new Error("Сервер не вернул адрес прямой трансляции");
@@ -74,6 +100,8 @@ function mountGo2RtcPlayer(container: HTMLDivElement, ticket: StreamTicket): () 
     background: boolean;
     controls?: boolean;
     muted?: boolean;
+    ondisconnect: () => void;
+    visibilityCheck: boolean;
   };
   player.className = "live-player__video";
   // video-stream does not observe attributes. Set its public properties after the
@@ -81,20 +109,48 @@ function mountGo2RtcPlayer(container: HTMLDivElement, ticket: StreamTicket): () 
   player.mode = ticket.modes?.join(",") || "webrtc,mse,hls";
   player.media = ticket.media || "video,audio";
   player.background = false;
+  player.visibilityCheck = false;
   player.controls = true;
   player.muted = true;
   player.src = url;
   container.replaceChildren(player);
 
-  return () => {
-    player.src = "";
+  const video = player.querySelector("video");
+  if (!(video instanceof HTMLVideoElement)) {
     player.remove();
-    container.replaceChildren();
+    throw new Error("Медиаплеер не создал видеоэлемент");
+  }
+  video.autoplay = true;
+  video.controls = true;
+  video.muted = true;
+  video.playsInline = true;
+  const handleError = (): void => onError(liveMediaError(video));
+  video.addEventListener("canplay", onReady);
+  video.addEventListener("playing", onPlaying);
+  video.addEventListener("error", handleError);
+  void video.play().catch(() => undefined);
+
+  return {
+    dispose: () => {
+      video.removeEventListener("canplay", onReady);
+      video.removeEventListener("playing", onPlaying);
+      video.removeEventListener("error", handleError);
+      player.src = "";
+      player.ondisconnect();
+      player.remove();
+      container.replaceChildren();
+    },
   };
 }
 
-function mountNativeFallback(container: HTMLDivElement, ticket: StreamTicket): (() => void) | undefined {
-  if (!ticket.hls_url) {
+function mountNativeFallback(
+  container: HTMLDivElement,
+  ticket: StreamTicket,
+  onReady: () => void,
+  onPlaying: () => void,
+  onError: (message: string) => void,
+): MountedPlayer | undefined {
+  if (!ticket.hls_url || !supportsNativeHls()) {
     return undefined;
   }
   const video = document.createElement("video");
@@ -103,15 +159,24 @@ function mountNativeFallback(container: HTMLDivElement, ticket: StreamTicket): (
   video.autoplay = true;
   video.muted = true;
   video.playsInline = true;
+  const handleError = (): void => onError(liveMediaError(video));
+  video.addEventListener("canplay", onReady);
+  video.addEventListener("playing", onPlaying);
+  video.addEventListener("error", handleError);
   video.src = ticket.hls_url;
   container.replaceChildren(video);
   void video.play().catch(() => undefined);
 
-  return () => {
-    video.pause();
-    video.removeAttribute("src");
-    video.load();
-    video.remove();
+  return {
+    dispose: () => {
+      video.removeEventListener("canplay", onReady);
+      video.removeEventListener("playing", onPlaying);
+      video.removeEventListener("error", handleError);
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+      video.remove();
+    },
   };
 }
 
@@ -123,13 +188,126 @@ export function Go2RtcPlayer({
   const containerRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string>();
   const [reloadKey, setReloadKey] = useState(0);
-  const [status, setStatus] = useState<"connecting" | "playing">("connecting");
+  const [status, setStatus] = useState<"connecting" | "ready" | "playing">(
+    "connecting",
+  );
 
   useEffect(() => {
     const controller = new AbortController();
-    let dispose: (() => void) | undefined;
+    let mounted: MountedPlayer | undefined;
     let refreshTimer: number | undefined;
+    let startTimer: number | undefined;
+    let activePlayer: "native-hls" | "go2rtc" | undefined;
+    let switchingToGo2Rtc = false;
     let disposed = false;
+
+    const clearStartTimer = (): void => {
+      if (startTimer !== undefined) {
+        window.clearTimeout(startTimer);
+        startTimer = undefined;
+      }
+    };
+
+    const markPlaying = (): void => {
+      if (disposed) {
+        return;
+      }
+      clearStartTimer();
+      setError(undefined);
+      setStatus("playing");
+    };
+
+    const markReady = (): void => {
+      if (disposed) {
+        return;
+      }
+      clearStartTimer();
+      setError(undefined);
+      setStatus((current) => (current === "playing" ? current : "ready"));
+    };
+
+    const showPlayerError = (message: string): void => {
+      if (disposed) {
+        return;
+      }
+      clearStartTimer();
+      mounted?.dispose();
+      mounted = undefined;
+      setError(message);
+    };
+
+    const watchPlayerStart = (onTimeout: () => void): void => {
+      clearStartTimer();
+      startTimer = window.setTimeout(onTimeout, LIVE_START_TIMEOUT_MS);
+    };
+
+    const ensureGo2RtcRecoveryWatch = (): void => {
+      if (startTimer !== undefined) {
+        return;
+      }
+      startTimer = window.setTimeout(() => {
+        showPlayerError(
+          "Камера отвечает, но видео не запустилось. Проверьте формат потока или повторите подключение.",
+        );
+      }, LIVE_START_TIMEOUT_MS);
+    };
+
+    const handleGo2RtcError = (): void => {
+      if (disposed) {
+        return;
+      }
+      setError(undefined);
+      setStatus("connecting");
+      // video-stream has its own reconnect cycle. Keep it alive for one full
+      // recovery window before presenting a terminal error.
+      ensureGo2RtcRecoveryWatch();
+    };
+
+    const startGo2Rtc = async (
+      ticket: StreamTicket,
+      previousError?: string,
+    ): Promise<void> => {
+      if (disposed || switchingToGo2Rtc) {
+        return;
+      }
+      switchingToGo2Rtc = true;
+      clearStartTimer();
+      mounted?.dispose();
+      mounted = undefined;
+      activePlayer = undefined;
+      setError(undefined);
+      setStatus("connecting");
+      try {
+        await loadPlayerScript(normalizedPlayerScript(ticket));
+        if (disposed || !containerRef.current) {
+          return;
+        }
+        mounted = mountGo2RtcPlayer(
+          containerRef.current,
+          ticket,
+          markReady,
+          markPlaying,
+          handleGo2RtcError,
+        );
+        activePlayer = "go2rtc";
+        watchPlayerStart(() => {
+          showPlayerError(
+            "Камера отвечает, но видео не запустилось. Проверьте формат потока или повторите подключение.",
+          );
+        });
+      } catch (playerError) {
+        if (disposed) {
+          return;
+        }
+        const detail =
+          playerError instanceof Error ? playerError.message : previousError;
+        showPlayerError(
+          detail || "Не удалось запустить защищённый плеер прямой трансляции.",
+        );
+      } finally {
+        switchingToGo2Rtc = false;
+      }
+    };
 
     async function connect(): Promise<void> {
       setError(undefined);
@@ -145,22 +323,31 @@ export function Go2RtcPlayer({
           }
         }, ticketRefreshDelay(ticket));
 
-        try {
-          await loadPlayerScript(normalizedPlayerScript(ticket));
-          if (disposed || !containerRef.current) {
+        const fallbackToGo2Rtc = (message: string): void => {
+          if (disposed || activePlayer !== "native-hls") {
             return;
           }
-          dispose = mountGo2RtcPlayer(containerRef.current, ticket);
-        } catch (playerError) {
-          if (disposed || !containerRef.current) {
-            return;
-          }
-          dispose = mountNativeFallback(containerRef.current, ticket);
-          if (!dispose) {
-            throw playerError;
-          }
+          void startGo2Rtc(ticket, message);
+        };
+
+        mounted = mountNativeFallback(
+          containerRef.current,
+          ticket,
+          markReady,
+          markPlaying,
+          fallbackToGo2Rtc,
+        );
+        if (mounted) {
+          activePlayer = "native-hls";
+          watchPlayerStart(() => {
+            fallbackToGo2Rtc(
+              "HLS-поток не запустился во встроенном плеере Telegram.",
+            );
+          });
+          return;
         }
-        setStatus("playing");
+
+        await startGo2Rtc(ticket);
       } catch (requestError) {
         if (disposed || controller.signal.aborted) {
           return;
@@ -176,21 +363,15 @@ export function Go2RtcPlayer({
       if (refreshTimer !== undefined) {
         window.clearTimeout(refreshTimer);
       }
-      dispose?.();
+      clearStartTimer();
+      mounted?.dispose();
     };
   }, [cameraId, reloadKey]);
 
   useEffect(() => {
-    const stopWhenHidden = () => {
-      if (document.visibilityState === "hidden") {
-        onStop();
-      }
-    };
     window.addEventListener("pagehide", onStop);
-    document.addEventListener("visibilitychange", stopWhenHidden);
     return () => {
       window.removeEventListener("pagehide", onStop);
-      document.removeEventListener("visibilitychange", stopWhenHidden);
     };
   }, [onStop]);
 
@@ -224,7 +405,11 @@ export function Go2RtcPlayer({
           title="Трансляция недоступна"
         />
       )}
-      <p className="live-player__hint">Звук включается вручную в плеере</p>
+      <p className="live-player__hint">
+        {status === "ready"
+          ? "Нажмите ▶ для запуска; звук включается вручную"
+          : "Звук включается вручную в плеере"}
+      </p>
     </section>
   );
 }

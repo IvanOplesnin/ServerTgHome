@@ -17,9 +17,15 @@ import {
 } from "../components/Icons";
 import { EmptyState, ErrorState, SectionSkeleton } from "../components/States";
 import { formatBytes, formatDateTime, formatDuration, safeFilename } from "../lib/format";
+import { classifyVideoPlaybackFailure } from "../lib/media";
 import { Go2RtcPlayer } from "../live/Go2RtcPlayer";
 import { notify, requestTelegramDownload } from "../telegram";
 import type { TabComponentProps } from "./registryTypes";
+
+interface PlaybackErrorState {
+  message: string;
+  retryable: boolean;
+}
 
 function cameraHealth(camera: Camera): {
   state: "online" | "offline" | "degraded" | "unknown";
@@ -85,6 +91,9 @@ export function CamerasTab({ bootstrap }: TabComponentProps): React.ReactElement
   const [videoTickets, setVideoTickets] = useState<Record<string, DownloadTicket>>({});
   const [ticketLoadingId, setTicketLoadingId] = useState<string>();
   const [ticketErrors, setTicketErrors] = useState<Record<string, string>>({});
+  const [playbackErrors, setPlaybackErrors] = useState<
+    Record<string, PlaybackErrorState>
+  >({});
   const [downloadingId, setDownloadingId] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const archiveRequestRef = useRef(0);
@@ -165,6 +174,7 @@ export function CamerasTab({ bootstrap }: TabComponentProps): React.ReactElement
     setExpandedVideoId(undefined);
     setVideoTickets({});
     setTicketErrors({});
+    setPlaybackErrors({});
     playbackRetryRef.current = {};
     playbackResumeRef.current = {};
     void loadVideos(undefined, false, controller.signal);
@@ -200,6 +210,11 @@ export function CamerasTab({ bootstrap }: TabComponentProps): React.ReactElement
     try {
       const ticket = await api.createDownloadTicket(video.id);
       setVideoTickets((current) => ({ ...current, [videoId]: ticket }));
+      setPlaybackErrors((current) => {
+        const next = { ...current };
+        delete next[videoId];
+        return next;
+      });
       return ticket;
     } catch (error) {
       const message =
@@ -217,6 +232,11 @@ export function CamerasTab({ bootstrap }: TabComponentProps): React.ReactElement
       setExpandedVideoId(undefined);
       delete playbackRetryRef.current[videoId];
       delete playbackResumeRef.current[videoId];
+      setPlaybackErrors((current) => {
+        const next = { ...current };
+        delete next[videoId];
+        return next;
+      });
       return;
     }
     setExpandedVideoId(videoId);
@@ -232,9 +252,12 @@ export function CamerasTab({ bootstrap }: TabComponentProps): React.ReactElement
     const videoId = String(video.id);
     const retryCount = playbackRetryRef.current[videoId] ?? 0;
     if (retryCount >= 1) {
-      setTicketErrors((current) => ({
+      setPlaybackErrors((current) => ({
         ...current,
-        [videoId]: "Не удалось продолжить воспроизведение после обновления ссылки.",
+        [videoId]: {
+          message: "Не удалось продолжить воспроизведение после обновления ссылки.",
+          retryable: true,
+        },
       }));
       return;
     }
@@ -243,6 +266,33 @@ export function CamerasTab({ bootstrap }: TabComponentProps): React.ReactElement
     if (Number.isFinite(element.currentTime) && element.currentTime > 0) {
       playbackResumeRef.current[videoId] = element.currentTime;
     }
+    void getVideoTicket(video, true).catch(() => undefined);
+  };
+
+  const handleVideoPlaybackError = (
+    video: VideoRecording,
+    element: HTMLVideoElement,
+  ): void => {
+    const videoId = String(video.id);
+    const failure = classifyVideoPlaybackFailure(element.error?.code);
+    if (failure.renewTicket) {
+      renewVideoPlayback(video, element);
+      return;
+    }
+    const message = failure.message;
+    if (!message) {
+      return;
+    }
+    setPlaybackErrors((current) => ({
+      ...current,
+      [videoId]: { message, retryable: failure.retryable },
+    }));
+  };
+
+  const retryVideoPlayback = (video: VideoRecording): void => {
+    const videoId = String(video.id);
+    playbackRetryRef.current[videoId] = 0;
+    delete playbackResumeRef.current[videoId];
     void getVideoTicket(video, true).catch(() => undefined);
   };
 
@@ -391,6 +441,7 @@ export function CamerasTab({ bootstrap }: TabComponentProps): React.ReactElement
                 const videoId = String(video.id);
                 const expanded = expandedVideoId === videoId;
                 const ticket = videoTickets[videoId];
+                const playbackError = playbackErrors[videoId];
                 return (
                   <article className="video-card" key={videoId}>
                     <button
@@ -427,27 +478,44 @@ export function CamerasTab({ bootstrap }: TabComponentProps): React.ReactElement
                           />
                         ) : ticket?.content_url ? (
                           <>
-                            <video
-                              controls
-                              onError={(event) =>
-                                renewVideoPlayback(video, event.currentTarget)
-                              }
-                              onLoadedMetadata={(event) => {
-                                const resumeAt = playbackResumeRef.current[videoId];
-                                if (resumeAt && resumeAt < event.currentTarget.duration) {
-                                  event.currentTarget.currentTime = resumeAt;
+                            {playbackError ? (
+                              <ErrorState
+                                message={playbackError.message}
+                                onRetry={
+                                  playbackError.retryable
+                                    ? () => retryVideoPlayback(video)
+                                    : undefined
                                 }
-                              }}
-                              onPlaying={() => {
-                                playbackRetryRef.current[videoId] = 0;
-                                delete playbackResumeRef.current[videoId];
-                              }}
-                              playsInline
-                              preload="metadata"
-                              src={ticket.content_url}
-                            >
-                              Ваш браузер не поддерживает просмотр этого видео.
-                            </video>
+                                title="Запись не воспроизводится"
+                              />
+                            ) : (
+                              <video
+                                controls
+                                onError={(event) =>
+                                  handleVideoPlaybackError(video, event.currentTarget)
+                                }
+                                onLoadedMetadata={(event) => {
+                                  const resumeAt = playbackResumeRef.current[videoId];
+                                  if (resumeAt && resumeAt < event.currentTarget.duration) {
+                                    event.currentTarget.currentTime = resumeAt;
+                                  }
+                                }}
+                                onPlaying={() => {
+                                  playbackRetryRef.current[videoId] = 0;
+                                  delete playbackResumeRef.current[videoId];
+                                  setPlaybackErrors((current) => {
+                                    const next = { ...current };
+                                    delete next[videoId];
+                                    return next;
+                                  });
+                                }}
+                                playsInline
+                                preload="metadata"
+                                src={ticket.content_url}
+                              >
+                                Ваш браузер не поддерживает просмотр этого видео.
+                              </video>
+                            )}
                             <button
                               className="download-button"
                               disabled={downloadingId === videoId}

@@ -560,6 +560,7 @@ h2 {
   gap: 10px;
   inset: 0;
   justify-content: center;
+  pointer-events: none;
   position: absolute;
 }
 

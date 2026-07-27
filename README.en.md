@@ -358,7 +358,10 @@ COMPOSE_PROFILES=miniapp
 - `default_duration_sec`: default `/clip` duration.
 - `ffmpeg_input_args`: ffmpeg input options.
 - `ffmpeg_output_args`: rolling buffer output options.
-- `ffmpeg_clip_output_args`: final Telegram clip output options.
+- `ffmpeg_clip_output_args`: final Telegram and Mini App clip output options,
+  used for both buffered and immediate recordings. For mobile Telegram
+  WebViews, keep the output at or below 1920x1080 with H.264 High Level 4.1,
+  no more than 30 fps, `yuv420p`, AAC 48 kHz and `+faststart`.
 
 `events`:
 
@@ -381,6 +384,10 @@ rtsp:
   listen: ":8554"
 
 streams:
+  entrance:
+    - rtsp://CAMERA_ACCOUNT:CAMERA_PASSWORD@192.168.1.10:554/stream1
+  entrance_web:
+    - "ffmpeg:entrance#video=h264#width=1920#height=-2#audio=aac"
   living:
     - tapo://TAPO_CLOUD_PASSWORD@192.168.1.26?subtype=0
     - rtsp://CAMERA_ACCOUNT:CAMERA_PASSWORD@192.168.1.26:554/stream1
@@ -393,6 +400,9 @@ Notes:
 
 - `TAPO_CLOUD_PASSWORD` is the Tapo account password used by the Tapo app for talkback.
 - `CAMERA_ACCOUNT` and `CAMERA_PASSWORD` are RTSP camera credentials.
+- `entrance_web` is an on-demand H.264 rendition for Mini App clients that
+  cannot decode the camera's high-resolution HEVC stream. Set the camera's
+  `go2rtc_stream` to `entrance_web`.
 - `preload` keeps the connection ready, including microphone/talkback.
 - The real `config/go2rtc.yaml` contains secrets and must not be committed.
 

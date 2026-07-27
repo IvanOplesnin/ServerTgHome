@@ -21,6 +21,11 @@ streams:
   entrance:
     - rtsp://CAMERA_ACCOUNT:CAMERA_PASSWORD@192.168.1.10:554/stream1
 
+  # Mobile Telegram WebViews cannot reliably decode HEVC or high-resolution
+  # main streams. Transcode only while somebody watches the Mini App.
+  entrance_web:
+    - "ffmpeg:entrance#video=h264#width=1920#height=-2#audio=aac"
+
   living:
     - tapo://TAPO_CLOUD_PASSWORD@192.168.1.26?subtype=0
     - rtsp://CAMERA_ACCOUNT:CAMERA_PASSWORD@192.168.1.26:554/stream1

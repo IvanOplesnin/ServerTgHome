@@ -583,18 +583,28 @@ cameras:
       - "0:v:0"
       - "-map"
       - "0:a?"
+      - "-vf"
+      - "scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2"
+      - "-fpsmax"
+      - "30"
       - "-c:v"
       - "libx264"
       - "-preset"
       - "veryfast"
       - "-crf"
       - "23"
+      - "-profile:v"
+      - "high"
+      - "-level:v"
+      - "4.1"
       - "-pix_fmt"
       - "yuv420p"
       - "-c:a"
       - "aac"
       - "-b:a"
       - "128k"
+      - "-ar"
+      - "48000"
       - "-movflags"
       - "+faststart"
 ```
@@ -608,7 +618,11 @@ cameras:
 - `default_duration_sec`: длительность `/clip <camera>` без указания секунд.
 - `ffmpeg_input_args`: параметры входа.
 - `ffmpeg_output_args`: параметры постоянного буфера. Обычно лучше `-c:v copy`, чтобы не грузить CPU постоянно.
-- `ffmpeg_clip_output_args`: параметры финального клипа для Telegram. H.264/AAC надежнее распознается клиентами Telegram.
+- `ffmpeg_clip_output_args`: параметры финального клипа для Telegram и
+  встроенного просмотра Mini App. Они используются и при сборке pre-event
+  клипа, и при обычной записи «сейчас». Для мобильных Telegram WebView
+  безопасный базовый вариант — не больше 1920×1080, H.264 High Level 4.1,
+  до 30 кадров/с, `yuv420p`, AAC 48 kHz и `+faststart`.
 
 Для Tapo с talkback лучше использовать:
 
@@ -664,6 +678,10 @@ rtsp:
   listen: ":8554"
 
 streams:
+  entrance:
+    - rtsp://CAMERA_ACCOUNT:CAMERA_PASSWORD@192.168.1.10:554/stream1
+  entrance_web:
+    - "ffmpeg:entrance#video=h264#width=1920#height=-2#audio=aac"
   living:
     - tapo://TAPO_CLOUD_PASSWORD@192.168.1.26?subtype=0
     - rtsp://CAMERA_ACCOUNT:CAMERA_PASSWORD@192.168.1.26:554/stream1
@@ -676,6 +694,9 @@ preload:
 
 - `TAPO_CLOUD_PASSWORD` - пароль от учетной записи Tapo, через которую приложение Tapo умеет talkback.
 - `CAMERA_ACCOUNT` и `CAMERA_PASSWORD` - учетная запись камеры для RTSP.
+- `entrance_web` — H.264-вариант высокого HEVC-потока для Mini App. Он
+  транскодируется go2rtc только во время просмотра; у камеры укажите
+  `go2rtc_stream: "entrance_web"`.
 - `preload` держит подключение готовым, включая microphone/talkback.
 - Реальный `config/go2rtc.yaml` содержит секреты и не должен попадать в git.
 
