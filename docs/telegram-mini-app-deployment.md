@@ -262,6 +262,10 @@ miniapp.example.com {
 		route {
 			forward_auth MINIPC_LAN_IP:28080 {
 				uri /api/webapp/v1/media/authorize
+				# The cloned WebSocket request must remain a regular HTTP auth
+				# request; otherwise ASGI treats it as an unhandled WS route.
+				header_up -Connection
+				header_up -Upgrade
 			}
 			rewrite * {re.protected_media.upstream}
 			header Cache-Control "no-store"
@@ -300,6 +304,8 @@ allowlist пользователя и членство в группе. Пост
 `Origin` удаляется только на этом уже авторизованном proxy-hop: это сохраняет
 встроенную origin-защиту go2rtc на остальных его интерфейсах и не требует
 небезопасного глобального `api.origin: "*"`.
+`Connection` и `Upgrade` удаляются только из клонированного запроса
+`forward_auth`; исходный WebSocket после успешной авторизации сохраняет их.
 
 Capability-ticket находится в URL. Не включайте access log для
 `/media/t/*` и `/api/webapp/v1/files/*`. В проекте Uvicorn и `miniapp-web`

@@ -145,6 +145,8 @@ class MiniAppInfrastructureTests(unittest.TestCase):
             self.assertIn(endpoint, deployment)
         self.assertIn("forward_auth MINIPC_LAN_IP:28080", deployment)
         self.assertIn("reverse_proxy MINIPC_LAN_IP:21984", deployment)
+        self.assertIn("header_up -Connection", deployment)
+        self.assertIn("header_up -Upgrade", deployment)
         self.assertIn("header_up -Origin", deployment)
         self.assertIn("method GET HEAD", deployment)
         self.assertIn("stream_timeout 10m", deployment)
