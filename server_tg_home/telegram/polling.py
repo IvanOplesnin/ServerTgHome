@@ -9,7 +9,15 @@ from pathlib import Path
 from aiogram import Dispatcher, F
 from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
 from aiogram.filters import Command, CommandStart
-from aiogram.types import BotCommand, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    BotCommand,
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    MenuButtonWebApp,
+    Message,
+    WebAppInfo,
+)
 from sqlalchemy import select
 
 from server_tg_home.audio.service import make_voice_source_path
@@ -37,6 +45,7 @@ from server_tg_home.media.storage import format_bytes
 from server_tg_home.telegram.client import AsyncTelegramClient, TelegramApiError, chat_is_allowed
 from server_tg_home.telegram.panels import (
     PANEL_CALLBACK_PREFIX,
+    build_mini_app_markup,
     build_panel_markup,
     build_panel_text,
     parse_panel_callback,
@@ -70,6 +79,7 @@ TELEGRAM_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("panel", "Create Telegram topic button panel", "/panel <id|all>"),
     ("ac_on", "Turn on a Home Assistant climate entity", "/ac_on <climate.entity_id>"),
     ("status", "Show service status", "/status"),
+    ("app", "Open the smart home Mini App", "/app"),
 )
 
 
@@ -87,6 +97,7 @@ class TelegramPolling:
         self.audio_queue = audio_queue
         self.client = AsyncTelegramClient(settings.telegram)
         self.dispatcher = Dispatcher()
+        self.mini_app_launch_url: str | None = None
         self._register_handlers()
 
     async def stop(self) -> None:
@@ -97,6 +108,7 @@ class TelegramPolling:
     async def run(self) -> None:
         logger.info("Telegram polling started with aiogram")
         try:
+            await self._setup_mini_app()
             await self._setup_bot_commands()
             await self.dispatcher.start_polling(
                 self.client.bot,
@@ -123,6 +135,25 @@ class TelegramPolling:
             logger.info("Telegram bot command menu configured")
         except (TelegramAPIError, TelegramNetworkError):
             logger.warning("Failed to configure Telegram bot commands", exc_info=True)
+
+    async def _setup_mini_app(self) -> None:
+        if not self.settings.webapp.enabled or not self.settings.webapp.public_url:
+            return
+        try:
+            bot_user = await self.client.bot.get_me()
+            if not bot_user.username:
+                logger.warning("Telegram Mini App launch link is unavailable: bot has no username")
+                return
+            self.mini_app_launch_url = f"https://t.me/{bot_user.username}?startapp=group"
+            await self.client.bot.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(
+                    text="Умный дом",
+                    web_app=WebAppInfo(url=self.settings.webapp.public_url),
+                )
+            )
+            logger.info("Telegram Mini App launch controls configured")
+        except (TelegramAPIError, TelegramNetworkError):
+            logger.warning("Failed to configure Telegram Mini App launch controls", exc_info=True)
 
     def _register_handlers(self) -> None:
         @self.dispatcher.message(CommandStart())
@@ -293,6 +324,14 @@ class TelegramPolling:
             chat_id, message_thread_id = context
             await self._handle_status(chat_id, message_thread_id, _message_args(message))
 
+        @self.dispatcher.message(Command("app"))
+        async def command_app(message: Message) -> None:
+            context = await self._allowed_chat_context(message)
+            if context is None:
+                return
+            chat_id, message_thread_id = context
+            await self._handle_app(chat_id, message_thread_id)
+
         @self.dispatcher.callback_query(F.data.startswith(f"{PANEL_CALLBACK_PREFIX}:"))
         async def panel_callback(callback: CallbackQuery) -> None:
             await self._handle_panel_callback(callback)
@@ -353,6 +392,28 @@ class TelegramPolling:
 
     async def _handle_cameras(self, chat_id: int, message_thread_id: int | None, args: list[str]) -> None:
         await self._reply(chat_id, build_cameras_text(self.settings), message_thread_id=message_thread_id)
+
+    async def _handle_app(self, chat_id: int, message_thread_id: int | None) -> None:
+        if not self.settings.webapp.enabled:
+            await self._reply(
+                chat_id,
+                "Веб-приложение умного дома отключено.",
+                message_thread_id=message_thread_id,
+            )
+            return
+        if not self.mini_app_launch_url:
+            await self._reply(
+                chat_id,
+                "Ссылка на веб-приложение пока недоступна. Проверьте настройку Main Mini App в BotFather.",
+                message_thread_id=message_thread_id,
+            )
+            return
+        await self._reply(
+            chat_id,
+            "Умный дом\n\nКамеры, сохранённые видео, температура и влажность.",
+            message_thread_id=message_thread_id,
+            reply_markup=build_mini_app_markup(self.mini_app_launch_url),
+        )
 
     async def _handle_clip(self, chat_id: int, message_thread_id: int | None, args: list[str]) -> None:
         if not args:
@@ -656,7 +717,11 @@ class TelegramPolling:
                     build_panel_text(panel_id, panel),
                     message_thread_id=target_thread_id,
                     parse_mode="HTML",
-                    reply_markup=build_panel_markup(panel_id, panel),
+                    reply_markup=build_panel_markup(
+                        panel_id,
+                        panel,
+                        mini_app_url=self.mini_app_launch_url,
+                    ),
                 )
             except (TelegramApiError, TelegramAPIError, TelegramNetworkError):
                 logger.warning("Failed to send Telegram panel %s", panel_id, exc_info=True)
