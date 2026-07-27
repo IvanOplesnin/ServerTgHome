@@ -120,7 +120,7 @@ export function CamerasTab({ bootstrap }: TabComponentProps): React.ReactElement
     void refreshCameras(controller.signal);
     const interval = window.setInterval(() => {
       if (document.visibilityState === "visible") {
-        void refreshCameras();
+        void refreshCameras(controller.signal);
       }
     }, 30_000);
     return () => {

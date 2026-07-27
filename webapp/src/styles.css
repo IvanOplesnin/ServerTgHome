@@ -1063,11 +1063,19 @@ h2 {
 
 .bottom-nav__inner {
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;
+  justify-content: safe center;
   margin: 0 auto;
   max-width: 760px;
   min-height: 72px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
   position: relative;
+  scrollbar-width: none;
+}
+
+.bottom-nav__inner::-webkit-scrollbar {
+  display: none;
 }
 
 .bottom-nav button {

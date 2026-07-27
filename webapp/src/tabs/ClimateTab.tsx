@@ -108,7 +108,7 @@ export function ClimateTab({ bootstrap }: TabComponentProps): React.ReactElement
     void loadCurrent(controller.signal);
     const interval = window.setInterval(() => {
       if (document.visibilityState === "visible") {
-        void loadCurrent();
+        void loadCurrent(controller.signal);
       }
     }, 60_000);
     return () => {
