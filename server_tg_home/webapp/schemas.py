@@ -64,6 +64,49 @@ class VideoTicketResponse(BaseModel):
     expires_at: datetime
 
 
+class StartRecordingRequest(BaseModel):
+    duration_sec: int | None = Field(
+        default=None,
+        ge=1,
+        le=3600,
+        strict=True,
+    )
+
+
+class StartRecordingResponse(BaseModel):
+    job_id: str
+    camera_id: str
+    duration_sec: int
+    status: Literal["queued"] = "queued"
+    phase: Literal["queued"] = "queued"
+    created_at: datetime
+
+
+class RecordingActivityItem(BaseModel):
+    job_id: str
+    camera_id: str
+    status: Literal["queued", "running"]
+    phase: Literal["queued", "recording", "finalizing", "stale"]
+    duration_sec: int
+    created_at: datetime
+    started_at: datetime | None
+    expected_finish_at: datetime | None
+
+
+class RecordingResultItem(BaseModel):
+    job_id: str
+    camera_id: str
+    status: Literal["done", "failed"]
+    finished_at: datetime
+    video_id: int | None
+
+
+class RecordingActivityList(BaseModel):
+    items: list[RecordingActivityItem]
+    recent_results: list[RecordingResultItem]
+    generated_at: datetime
+
+
 class VideoItem(BaseModel):
     id: int
     camera_id: str

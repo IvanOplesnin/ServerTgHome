@@ -80,6 +80,8 @@ def create_record_video_file_job(
     chat_ids: list[int] | None,
     message_thread_id: int | None,
     message: str | None,
+    use_default_chat_ids: bool = True,
+    requested_by_user_id: int | None = None,
 ) -> str:
     if camera_id not in settings.cameras:
         raise ValueError(f"Unknown camera: {camera_id}")
@@ -87,11 +89,17 @@ def create_record_video_file_job(
         "camera_id": camera_id,
         "duration_sec": duration_sec,
         "pre_event_sec": pre_event_sec if pre_event_sec is not None else 0,
-        "chat_ids": resolve_chat_ids(settings, chat_ids),
+        "chat_ids": (
+            resolve_chat_ids(settings, chat_ids)
+            if use_default_chat_ids
+            else list(chat_ids or [])
+        ),
         "message_thread_id": resolve_message_thread_id(settings, message_thread_id),
         "message": message,
         "event_time": iso_utc_now(),
     }
+    if requested_by_user_id is not None:
+        payload["requested_by_user_id"] = requested_by_user_id
     job = create_job(
         session,
         queue,

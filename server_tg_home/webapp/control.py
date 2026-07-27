@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 import re
-from typing import Annotated
+from typing import Annotated, cast
 from urllib.parse import parse_qs, quote, urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Request, Response, status
@@ -10,6 +11,15 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from server_tg_home.core.config import Settings
+from server_tg_home.database.models import Job
+from server_tg_home.jobs.factory import create_record_video_file_job
+from server_tg_home.jobs.queue import JobQueue
+from server_tg_home.jobs.repository import JobEnqueueError
+from server_tg_home.jobs.recording_status import (
+    MAX_RECORD_DURATION_SEC,
+    list_active_recordings,
+    list_recent_recording_results,
+)
 from server_tg_home.webapp.auth import (
     MiniAppAccessDeniedError,
     MiniAppAuthService,
@@ -26,8 +36,13 @@ from server_tg_home.webapp.schemas import (
     BootstrapResponse,
     BootstrapTab,
     ClimateRoomDefinition,
+    RecordingActivityItem,
+    RecordingActivityList,
+    RecordingResultItem,
     SessionLoginRequest,
     SessionResponse,
+    StartRecordingRequest,
+    StartRecordingResponse,
     StreamTicketResponse,
     VideoTicketResponse,
     WebAppUser,
@@ -134,6 +149,143 @@ def create_webapp_control_router() -> APIRouter:
             tabs=tabs,
             cameras=get_cameras(settings).items,
             climate_rooms=climate_rooms,
+        )
+
+    @router.get(
+        "/recordings",
+        response_model=RecordingActivityList,
+    )
+    async def active_recordings(
+        response: Response,
+        principal: Annotated[SessionRecord, Depends(require_webapp_session)],
+        settings: Annotated[Settings, Depends(get_webapp_settings)],
+        session: Annotated[Session, Depends(get_webapp_session)],
+    ) -> RecordingActivityList:
+        _require_admin(principal)
+        response.headers["Cache-Control"] = "private, no-store"
+        now = datetime.now(UTC)
+        activities = list_active_recordings(
+            session,
+            camera_ids=set(visible_camera_ids(settings)),
+            now=now,
+        )
+        recent_results = list_recent_recording_results(
+            session,
+            camera_ids=set(visible_camera_ids(settings)),
+            now=now,
+        )
+        return RecordingActivityList(
+            items=[
+                RecordingActivityItem(
+                    job_id=activity.job_id,
+                    camera_id=activity.camera_id,
+                    status=activity.status,
+                    phase=activity.phase,
+                    duration_sec=activity.duration_sec,
+                    created_at=activity.created_at,
+                    started_at=activity.started_at,
+                    expected_finish_at=activity.expected_finish_at,
+                )
+                for activity in activities
+            ],
+            recent_results=[
+                RecordingResultItem(
+                    job_id=result.job_id,
+                    camera_id=result.camera_id,
+                    status=result.status,
+                    finished_at=result.finished_at,
+                    video_id=result.video_id,
+                )
+                for result in recent_results
+            ],
+            generated_at=now,
+        )
+
+    @router.post(
+        "/cameras/{camera_id}/recordings",
+        response_model=StartRecordingResponse,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def start_recording(
+        camera_id: Annotated[str, Path(min_length=1, max_length=128)],
+        body: StartRecordingRequest,
+        request: Request,
+        response: Response,
+        principal: Annotated[SessionRecord, Depends(require_webapp_session)],
+        settings: Annotated[Settings, Depends(get_webapp_settings)],
+        session: Annotated[Session, Depends(get_webapp_session)],
+    ) -> StartRecordingResponse:
+        _require_admin(principal)
+        camera = settings.cameras.get(camera_id)
+        if camera is None or not camera.web_enabled:
+            raise _http_error(
+                status.HTTP_404_NOT_FOUND,
+                "camera_not_found",
+                "The requested camera is unavailable",
+            )
+
+        response.headers["Cache-Control"] = "private, no-store"
+        duration_sec = (
+            body.duration_sec
+            if body.duration_sec is not None
+            else camera.default_duration_sec
+        )
+        duration_sec = max(1, min(duration_sec, MAX_RECORD_DURATION_SEC))
+        async with _camera_recording_lock(request, camera_id):
+            already_active = any(
+                activity.blocks_new_recording
+                for activity in list_active_recordings(
+                    session,
+                    camera_ids={camera_id},
+                )
+            )
+            if already_active:
+                raise _http_error(
+                    status.HTTP_409_CONFLICT,
+                    "recording_already_active",
+                    (
+                        "Для этой камеры уже запущена запись "
+                        "или есть запись в очереди"
+                    ),
+                )
+
+            try:
+                job_id = create_record_video_file_job(
+                    settings,
+                    session,
+                    _job_queue(request),
+                    source="telegram_mini_app",
+                    camera_id=camera_id,
+                    duration_sec=duration_sec,
+                    pre_event_sec=0,
+                    chat_ids=[],
+                    message_thread_id=None,
+                    message=f"Mini App recording {camera_id}",
+                    use_default_chat_ids=False,
+                    requested_by_user_id=principal.user_id,
+                )
+            except JobEnqueueError as exc:
+                raise _http_error(
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
+                    "recording_queue_unavailable",
+                    (
+                        "Не удалось поставить запись в очередь. "
+                        "Повторите позже."
+                    ),
+                ) from exc
+
+        job = session.get(Job, job_id)
+        if job is None:
+            raise _http_error(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "recording_job_unavailable",
+                "Не удалось получить созданное задание записи.",
+            )
+        return StartRecordingResponse(
+            job_id=job_id,
+            camera_id=camera_id,
+            duration_sec=duration_sec,
+            created_at=_as_utc(job.created_at),
         )
 
     @router.post(
@@ -324,6 +476,40 @@ def _ticket_store(request: Request) -> RedisTicketStore:
     return store
 
 
+def _job_queue(request: Request) -> JobQueue:
+    queue = getattr(request.app.state, "queue", None)
+    if queue is None or not callable(getattr(queue, "enqueue", None)):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Job queue is not configured",
+        )
+    return cast(JobQueue, queue)
+
+
+def _camera_recording_lock(
+    request: Request,
+    camera_id: str,
+) -> asyncio.Lock:
+    locks = getattr(request.app.state, "webapp_recording_locks", None)
+    if not isinstance(locks, dict):
+        locks = {}
+        request.app.state.webapp_recording_locks = locks
+    lock = locks.get(camera_id)
+    if not isinstance(lock, asyncio.Lock):
+        lock = asyncio.Lock()
+        locks[camera_id] = lock
+    return lock
+
+
+def _require_admin(principal: SessionRecord) -> None:
+    if not principal.is_admin:
+        raise _http_error(
+            status.HTTP_403_FORBIDDEN,
+            "admin_required",
+            "Only administrators can manage camera recordings",
+        )
+
+
 def _webapp_user(principal: SessionRecord) -> WebAppUser:
     return WebAppUser(
         id=principal.user_id,
@@ -412,6 +598,12 @@ def _video_response(
 
 def _as_datetime(timestamp: int) -> datetime:
     return datetime.fromtimestamp(timestamp, UTC)
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _ticket_not_found() -> HTTPException:

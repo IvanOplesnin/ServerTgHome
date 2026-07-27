@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -26,6 +26,20 @@ from server_tg_home.webapp.session import RedisSessionStore
 from server_tg_home.webapp.tickets import RedisTicketStore
 
 from tests.test_webapp_auth import BOT_TOKEN, NOW, FakeRedis, _signed_init_data
+
+
+class FakeJobQueue:
+    def __init__(self) -> None:
+        self.job_ids: list[str] = []
+
+    def enqueue(self, job_id: str) -> None:
+        self.job_ids.append(job_id)
+
+
+class FailingJobQueue:
+    def enqueue(self, job_id: str) -> None:
+        del job_id
+        raise RuntimeError("broker unavailable")
 
 
 class WebAppControlTests(unittest.TestCase):
@@ -111,6 +125,8 @@ class WebAppControlTests(unittest.TestCase):
         self.app.state.settings = self.settings
         self.app.state.webapp_auth = self.auth
         self.app.state.webapp_tickets = self.ticket_store
+        self.queue = FakeJobQueue()
+        self.app.state.queue = self.queue
         self.app.include_router(create_webapp_control_router())
         self.app.include_router(
             create_webapp_router(auth_dependency=require_webapp_session)
@@ -281,6 +297,213 @@ class WebAppControlTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 404)
+
+    def test_admin_can_start_and_list_camera_recording(self) -> None:
+        self._login()
+
+        started = self.client.post(
+            "/api/webapp/v1/cameras/entrance/recordings",
+            json={},
+            headers={"X-STH-WebApp": "1"},
+        )
+
+        self.assertEqual(started.status_code, 202, started.text)
+        self.assertEqual(started.headers["cache-control"], "private, no-store")
+        payload = started.json()
+        self.assertEqual(payload["camera_id"], "entrance")
+        self.assertEqual(payload["duration_sec"], 20)
+        self.assertEqual(payload["status"], "queued")
+        self.assertEqual(payload["phase"], "queued")
+        self.assertIsInstance(payload["created_at"], str)
+        self.assertEqual(self.queue.job_ids, [payload["job_id"]])
+
+        with self.sessions() as session:
+            job = session.get(Job, payload["job_id"])
+            self.assertIsNotNone(job)
+            assert job is not None
+            self.assertEqual(job.type, "record_video_file")
+            self.assertEqual(job.source, "telegram_mini_app")
+            self.assertEqual(job.payload["chat_ids"], [])
+            self.assertEqual(job.payload["pre_event_sec"], 0)
+            self.assertEqual(job.payload["requested_by_user_id"], 42)
+
+        active = self.client.get("/api/webapp/v1/recordings")
+        self.assertEqual(active.status_code, 200, active.text)
+        self.assertEqual(active.headers["cache-control"], "private, no-store")
+        self.assertEqual(active.json()["recent_results"], [])
+        self.assertEqual(active.json()["items"], [
+            {
+                "job_id": payload["job_id"],
+                "camera_id": "entrance",
+                "status": "queued",
+                "phase": "queued",
+                "duration_sec": 20,
+                "created_at": active.json()["items"][0]["created_at"],
+                "started_at": None,
+                "expected_finish_at": None,
+            }
+        ])
+
+        duplicate = self.client.post(
+            "/api/webapp/v1/cameras/entrance/recordings",
+            json={"duration_sec": 60},
+            headers={"X-STH-WebApp": "1"},
+        )
+        self.assertEqual(duplicate.status_code, 409)
+        self.assertEqual(
+            duplicate.json()["detail"]["code"],
+            "recording_already_active",
+        )
+
+        with self.sessions() as session:
+            job = session.get(Job, payload["job_id"])
+            assert job is not None
+            started_at = datetime.now(UTC)
+            job.status = "running"
+            job.started_at = started_at
+            job.payload = {
+                **job.payload,
+                "recording_phase": "recording",
+            }
+            session.commit()
+        running = self.client.get("/api/webapp/v1/recordings")
+        running_item = running.json()["items"][0]
+        self.assertEqual(running_item["status"], "running")
+        self.assertEqual(running_item["phase"], "recording")
+        expected_finish = datetime.fromisoformat(
+            running_item["expected_finish_at"].replace("Z", "+00:00")
+        )
+        self.assertAlmostEqual(
+            expected_finish.timestamp(),
+            (started_at + timedelta(seconds=20)).timestamp(),
+            delta=0.01,
+        )
+
+        with self.sessions() as session:
+            job = session.get(Job, payload["job_id"])
+            assert job is not None
+            job.status = "done"
+            job.finished_at = datetime.now(UTC)
+            video = Video(
+                job_id=job.id,
+                camera_id="entrance",
+                path=str(self.storage_path / "entrance" / "new.mp4"),
+                size_bytes=100,
+                duration_sec=20,
+            )
+            session.add(video)
+            session.commit()
+            video_id = video.id
+        completed = self.client.get("/api/webapp/v1/recordings").json()
+        self.assertEqual(completed["items"], [])
+        self.assertEqual(completed["recent_results"][0]["job_id"], payload["job_id"])
+        self.assertEqual(completed["recent_results"][0]["status"], "done")
+        self.assertEqual(completed["recent_results"][0]["video_id"], video_id)
+
+    def test_recording_control_is_admin_only_and_validates_camera(self) -> None:
+        self._login()
+
+        hidden = self.client.post(
+            "/api/webapp/v1/cameras/private/recordings",
+            json={},
+            headers={"X-STH-WebApp": "1"},
+        )
+        invalid_duration = self.client.post(
+            "/api/webapp/v1/cameras/entrance/recordings",
+            json={"duration_sec": 3601},
+            headers={"X-STH-WebApp": "1"},
+        )
+        boolean_duration = self.client.post(
+            "/api/webapp/v1/cameras/entrance/recordings",
+            json={"duration_sec": True},
+            headers={"X-STH-WebApp": "1"},
+        )
+        string_duration = self.client.post(
+            "/api/webapp/v1/cameras/entrance/recordings",
+            json={"duration_sec": "60"},
+            headers={"X-STH-WebApp": "1"},
+        )
+        missing_csrf = self.client.post(
+            "/api/webapp/v1/cameras/entrance/recordings",
+            json={},
+        )
+
+        self.assertEqual(hidden.status_code, 404)
+        self.assertEqual(invalid_duration.status_code, 422)
+        self.assertEqual(boolean_duration.status_code, 422)
+        self.assertEqual(string_duration.status_code, 422)
+        self.assertEqual(missing_csrf.status_code, 403)
+
+        self.client.cookies.clear()
+        self.settings.telegram.admin_user_ids = [99]
+        self.settings.webapp.viewer_user_ids = [42]
+        self.settings.webapp.require_group_membership = False
+        self._login()
+        viewer_start = self.client.post(
+            "/api/webapp/v1/cameras/entrance/recordings",
+            json={},
+            headers={"X-STH-WebApp": "1"},
+        )
+        viewer_status = self.client.get("/api/webapp/v1/recordings")
+
+        self.assertEqual(viewer_start.status_code, 403)
+        self.assertEqual(viewer_status.status_code, 403)
+        self.assertEqual(
+            viewer_start.json()["detail"]["code"],
+            "admin_required",
+        )
+
+    def test_failed_enqueue_does_not_leave_phantom_recording(self) -> None:
+        self._login()
+        self.app.state.queue = FailingJobQueue()
+
+        response = self.client.post(
+            "/api/webapp/v1/cameras/entrance/recordings",
+            json={},
+            headers={"X-STH-WebApp": "1"},
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            response.json()["detail"]["code"],
+            "recording_queue_unavailable",
+        )
+        with self.sessions() as session:
+            self.assertEqual(session.query(Job).count(), 0)
+
+    def test_stale_job_does_not_block_new_recording(self) -> None:
+        self._login()
+        old_time = datetime.now(UTC) - timedelta(hours=1)
+        with self.sessions() as session:
+            session.add(
+                Job(
+                    id="stale-recording",
+                    type="record_video_file",
+                    source="telegram_mini_app",
+                    status="running",
+                    payload={
+                        "camera_id": "entrance",
+                        "duration_sec": 20,
+                        "recording_phase": "recording",
+                    },
+                    created_at=old_time,
+                    started_at=old_time,
+                )
+            )
+            session.commit()
+
+        response = self.client.post(
+            "/api/webapp/v1/cameras/entrance/recordings",
+            json={},
+            headers={"X-STH-WebApp": "1"},
+        )
+
+        self.assertEqual(response.status_code, 202, response.text)
+        activities = self.client.get("/api/webapp/v1/recordings").json()["items"]
+        self.assertEqual(
+            {item["phase"] for item in activities},
+            {"queued", "stale"},
+        )
 
     def test_video_ticket_supports_unauthenticated_range_and_download(self) -> None:
         video_id, data = self._add_video()

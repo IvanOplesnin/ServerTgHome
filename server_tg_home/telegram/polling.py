@@ -41,6 +41,11 @@ from server_tg_home.jobs.factory import (
     create_snapshot_job,
 )
 from server_tg_home.jobs.queue import JobQueue
+from server_tg_home.jobs.recording_status import (
+    MAX_RECORD_DURATION_SEC,
+    build_recording_status_text,
+    list_active_recordings,
+)
 from server_tg_home.media.storage import format_bytes
 from server_tg_home.telegram.client import AsyncTelegramClient, TelegramApiError, chat_is_allowed
 from server_tg_home.telegram.panels import (
@@ -56,7 +61,7 @@ logger = logging.getLogger(__name__)
 VIDEO_CALLBACK_PREFIX = "sth:v"
 VIDEO_LIST_LIMIT = 20
 VIDEO_LIST_QUERY_LIMIT = 100
-RECORD_MAX_DURATION_SEC = 3600
+RECORD_MAX_DURATION_SEC = MAX_RECORD_DURATION_SEC
 
 
 TELEGRAM_COMMANDS: tuple[tuple[str, str, str], ...] = (
@@ -65,6 +70,7 @@ TELEGRAM_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("cameras", "Show camera and buffer status", "/cameras"),
     ("clip", "Record and send a camera clip", "/clip <camera> [seconds]"),
     ("record", "Record a camera video to SSD", "/record <camera> [seconds]"),
+    ("recordings", "Show active SSD recordings", "/recordings"),
     ("videos", "Show saved camera videos", "/videos [camera]"),
     ("last", "Send latest saved video", "/last [camera]"),
     ("snapshot", "Capture and send one camera frame", "/snapshot <camera>"),
@@ -203,6 +209,21 @@ class TelegramPolling:
                 return
             chat_id, message_thread_id = context
             await self._handle_record(chat_id, message_thread_id, _message_args(message))
+
+        @self.dispatcher.message(Command("recordings"))
+        async def command_recordings(message: Message) -> None:
+            context = await self._admin_chat_context(
+                message,
+                "view active SSD recordings",
+            )
+            if context is None:
+                return
+            chat_id, message_thread_id = context
+            await self._handle_recordings(
+                chat_id,
+                message_thread_id,
+                _message_args(message),
+            )
 
         @self.dispatcher.message(Command("videos"))
         async def command_videos(message: Message) -> None:
@@ -493,6 +514,30 @@ class TelegramPolling:
         await self._reply(
             chat_id,
             f"Запись запущена: камера {camera_id}, {duration} сек.\nJob: {job_id}",
+            message_thread_id=message_thread_id,
+        )
+
+    async def _handle_recordings(
+        self,
+        chat_id: int,
+        message_thread_id: int | None,
+        args: list[str],
+    ) -> None:
+        if args:
+            await self._reply(
+                chat_id,
+                "Usage: /recordings",
+                message_thread_id=message_thread_id,
+            )
+            return
+        with new_session() as session:
+            activities = list_active_recordings(
+                session,
+                camera_ids=set(self.settings.cameras),
+            )
+        await self._reply(
+            chat_id,
+            build_recording_status_text(self.settings, activities),
             message_thread_id=message_thread_id,
         )
 
@@ -1276,9 +1321,7 @@ def _callback_user_id(callback: CallbackQuery) -> int | None:
 
 
 def _user_is_admin(settings: Settings, user_id: int | None) -> bool:
-    if not settings.telegram.admin_user_ids:
-        return True
-    return user_id in settings.telegram.admin_user_ids
+    return bool(settings.telegram.admin_user_ids) and user_id in settings.telegram.admin_user_ids
 
 
 def _user_is_explicit_admin(settings: Settings, user_id: int | None) -> bool:

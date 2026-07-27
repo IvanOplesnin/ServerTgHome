@@ -15,6 +15,7 @@ telegram:
   allowed_chat_ids: []
   default_chat_ids: []
   default_message_thread_id: null
+  # Empty means all admin-only commands and Mini App controls are denied.
   admin_user_ids: []
   panels:
     door:

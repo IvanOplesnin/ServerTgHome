@@ -15,7 +15,14 @@ from server_tg_home.database.models import AudioMessage, Job, Video
 from server_tg_home.database.session import new_session
 from server_tg_home.graphs.renderer import render_sensor_graph
 from server_tg_home.integrations.home_assistant import HomeAssistantClient
-from server_tg_home.jobs.repository import load_job, mark_done, mark_failed, mark_queued, mark_running
+from server_tg_home.jobs.repository import (
+    load_job,
+    mark_done,
+    mark_failed,
+    mark_queued,
+    mark_recording_phase,
+    mark_running,
+)
 from server_tg_home.media.recorder import record_event_clip, record_snapshot, start_rtsp_clip_capture, wait_for_capture
 from server_tg_home.media.storage import format_bytes, make_clip_path
 from server_tg_home.telegram.client import TelegramClient
@@ -96,6 +103,8 @@ class JobProcessor:
         camera_id = str(payload["camera_id"])
         duration_sec = int(payload.get("duration_sec") or self.settings.cameras[camera_id].default_duration_sec)
         pre_event_sec = int(payload.get("pre_event_sec") or 0)
+        mark_recording_phase(job, "recording")
+        session.commit()
         path = record_event_clip(
             self.settings,
             camera_id=camera_id,
@@ -104,6 +113,8 @@ class JobProcessor:
             pre_event_sec=pre_event_sec,
             event_time_value=payload.get("event_time"),
         )
+        mark_recording_phase(job, "finalizing")
+        session.commit()
         session.add(
             Video(
                 job_id=job.id,
@@ -130,6 +141,8 @@ class JobProcessor:
         camera_id = str(payload["camera_id"])
         duration_sec = int(payload.get("duration_sec") or self.settings.cameras[camera_id].default_duration_sec)
         pre_event_sec = int(payload.get("pre_event_sec") or 0)
+        mark_recording_phase(job, "recording")
+        session.commit()
         path = record_event_clip(
             self.settings,
             camera_id=camera_id,
@@ -138,6 +151,8 @@ class JobProcessor:
             pre_event_sec=pre_event_sec,
             event_time_value=payload.get("event_time"),
         )
+        mark_recording_phase(job, "finalizing")
+        session.commit()
         video = Video(
             job_id=job.id,
             camera_id=camera_id,
