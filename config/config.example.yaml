@@ -61,6 +61,8 @@ webapp:
   require_group_membership: true
   auth_max_age_sec: 300
   session_ttl_sec: 3600
+  media_ticket_ttl_sec: 3600
+  video_ticket_ttl_sec: 300
   tabs:
     - id: "cameras"
       title: "Камеры"

@@ -6,6 +6,64 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+class SessionLoginRequest(BaseModel):
+    init_data: str = Field(min_length=1, max_length=16_384)
+
+
+class WebAppUser(BaseModel):
+    id: int
+    first_name: str
+    last_name: str | None = None
+    username: str | None = None
+    role: Literal["admin", "viewer"]
+    is_admin: bool
+
+
+class SessionResponse(BaseModel):
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"
+    expires_at: datetime
+    user: WebAppUser
+
+
+class BootstrapTab(BaseModel):
+    id: str
+    title: str
+    kind: str
+    enabled: bool
+    required_role: Literal["admin", "viewer"]
+
+
+class ClimateRoomDefinition(BaseModel):
+    id: str
+    title: str
+
+
+class BootstrapResponse(BaseModel):
+    user: WebAppUser
+    tabs: list[BootstrapTab]
+    cameras: list["CameraItem"]
+    climate_rooms: list[ClimateRoomDefinition]
+
+
+class StreamTicketResponse(BaseModel):
+    ws_url: str
+    hls_url: str
+    player_script_url: str = "/media/video-stream.js"
+    modes: list[str] = Field(
+        default_factory=lambda: ["webrtc", "mse", "hls"]
+    )
+    media: str = "video,audio"
+    expires_at: datetime
+
+
+class VideoTicketResponse(BaseModel):
+    url: str
+    content_url: str
+    filename: str
+    expires_at: datetime
+
+
 class VideoItem(BaseModel):
     id: int
     camera_id: str

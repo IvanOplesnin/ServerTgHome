@@ -92,6 +92,8 @@ class WebAppConfig(BaseModel):
     require_group_membership: bool = True
     auth_max_age_sec: int = Field(default=300, ge=30, le=86_400)
     session_ttl_sec: int = Field(default=3600, ge=60, le=2_592_000)
+    media_ticket_ttl_sec: int = Field(default=3600, ge=60, le=3600)
+    video_ticket_ttl_sec: int = Field(default=300, ge=30, le=3600)
     tabs: list[WebAppTabConfig] = Field(default_factory=_default_webapp_tabs)
 
     @field_validator("public_url")

@@ -16,7 +16,14 @@ from server_tg_home.database.session import init_db, new_session
 from server_tg_home.jobs.factory import create_event_job, create_record_video_job
 from server_tg_home.jobs.queue import JobQueue
 from server_tg_home.media.storage import ensure_storage
+from server_tg_home.telegram.client import create_aiogram_bot
 from server_tg_home.telegram.polling import TelegramPolling
+from server_tg_home.webapp.auth import AiogramMembershipChecker, MiniAppAuthService
+from server_tg_home.webapp.control import create_webapp_control_router
+from server_tg_home.webapp.dependencies import require_webapp_session
+from server_tg_home.webapp.router import create_webapp_router
+from server_tg_home.webapp.session import RedisSessionStore
+from server_tg_home.webapp.tickets import RedisTicketStore
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +62,11 @@ def create_app() -> FastAPI:
         app.state.audio_queue = audio_queue
         app.state.telegram_polling = None
         app.state.telegram_task = None
+        app.state.webapp_auth = None
+        app.state.webapp_tickets = None
+        webapp_session_store: RedisSessionStore | None = None
+        webapp_ticket_store: RedisTicketStore | None = None
+        membership_bot = None
 
         if settings.api.enable_telegram_polling and settings.telegram.bot_token:
             polling = TelegramPolling(settings, queue, graph_queue, audio_queue)
@@ -63,6 +75,34 @@ def create_app() -> FastAPI:
             app.state.telegram_task = task
         else:
             logger.info("Telegram polling disabled or bot token is not configured")
+
+        if settings.webapp.enabled:
+            webapp_session_store = RedisSessionStore.from_url(
+                settings.app.redis_url,
+                settings.webapp.session_ttl_sec,
+            )
+            webapp_ticket_store = RedisTicketStore.from_url(
+                settings.app.redis_url,
+            )
+            membership_checker = None
+            if settings.telegram.bot_token:
+                polling = app.state.telegram_polling
+                if polling is not None:
+                    membership_bot = polling.client.bot
+                else:
+                    membership_bot = create_aiogram_bot(settings.telegram)
+                membership_checker = AiogramMembershipChecker(membership_bot)
+            else:
+                logger.warning(
+                    "Telegram Mini App is enabled without a bot token; "
+                    "authentication will fail closed"
+                )
+            app.state.webapp_auth = MiniAppAuthService(
+                settings,
+                webapp_session_store,
+                membership_checker,
+            )
+            app.state.webapp_tickets = webapp_ticket_store
 
         try:
             yield
@@ -75,6 +115,15 @@ def create_app() -> FastAPI:
                 task.cancel()
                 with suppress(asyncio.CancelledError):
                     await task
+            if (
+                membership_bot is not None
+                and polling is None
+            ):
+                await membership_bot.session.close()
+            if webapp_session_store is not None:
+                await webapp_session_store.close()
+            if webapp_ticket_store is not None:
+                await webapp_ticket_store.close()
 
     app = FastAPI(title="Server Tg Home", lifespan=lifespan)
 
@@ -207,6 +256,11 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"job_id": job_id, "status": "queued"}
+
+    app.include_router(create_webapp_control_router())
+    app.include_router(
+        create_webapp_router(auth_dependency=require_webapp_session)
+    )
 
     return app
 

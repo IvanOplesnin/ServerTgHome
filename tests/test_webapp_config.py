@@ -38,6 +38,12 @@ class WebAppConfigTests(unittest.TestCase):
                 ]
             )
 
+    def test_capability_ticket_lifetimes_are_bounded(self) -> None:
+        with self.assertRaises(ValidationError):
+            WebAppConfig(media_ticket_ttl_sec=3601)
+        with self.assertRaises(ValidationError):
+            WebAppConfig(video_ticket_ttl_sec=29)
+
     def test_camera_web_fields_are_safe_by_default(self) -> None:
         camera = CameraConfig(rtsp_url="rtsp://camera.local/stream")
 
