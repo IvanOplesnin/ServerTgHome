@@ -11,6 +11,9 @@ interface Go2RtcPlayerProps {
 }
 
 const loadedScripts = new Map<string, Promise<void>>();
+const MAX_TICKET_REFRESH_DELAY_MS = 9 * 60 * 1000;
+const MIN_TICKET_REFRESH_DELAY_MS = 5 * 1000;
+const TICKET_REFRESH_MARGIN_MS = 30 * 1000;
 
 function normalizedPlayerScript(ticket: StreamTicket): string {
   const candidate = ticket.player_script_url ?? "/media/video-stream.js";
@@ -39,6 +42,23 @@ async function loadPlayerScript(url: string): Promise<void> {
 
 function streamUrl(ticket: StreamTicket): string | undefined {
   return ticket.ws_url ?? ticket.url;
+}
+
+function ticketRefreshDelay(ticket: StreamTicket): number {
+  if (!ticket.expires_at) {
+    return MAX_TICKET_REFRESH_DELAY_MS;
+  }
+  const expiresAt = new Date(ticket.expires_at).getTime();
+  if (!Number.isFinite(expiresAt)) {
+    return MAX_TICKET_REFRESH_DELAY_MS;
+  }
+  return Math.max(
+    MIN_TICKET_REFRESH_DELAY_MS,
+    Math.min(
+      MAX_TICKET_REFRESH_DELAY_MS,
+      expiresAt - Date.now() - TICKET_REFRESH_MARGIN_MS,
+    ),
+  );
 }
 
 function mountGo2RtcPlayer(container: HTMLDivElement, ticket: StreamTicket): () => void {
@@ -108,6 +128,7 @@ export function Go2RtcPlayer({
   useEffect(() => {
     const controller = new AbortController();
     let dispose: (() => void) | undefined;
+    let refreshTimer: number | undefined;
     let disposed = false;
 
     async function connect(): Promise<void> {
@@ -118,6 +139,11 @@ export function Go2RtcPlayer({
         if (disposed || !containerRef.current) {
           return;
         }
+        refreshTimer = window.setTimeout(() => {
+          if (!disposed) {
+            setReloadKey((value) => value + 1);
+          }
+        }, ticketRefreshDelay(ticket));
 
         try {
           await loadPlayerScript(normalizedPlayerScript(ticket));
@@ -147,6 +173,9 @@ export function Go2RtcPlayer({
     return () => {
       disposed = true;
       controller.abort();
+      if (refreshTimer !== undefined) {
+        window.clearTimeout(refreshTimer);
+      }
       dispose?.();
     };
   }, [cameraId, reloadKey]);

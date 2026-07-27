@@ -45,7 +45,11 @@
 			}
 			rewrite * {re.protected_media.upstream}
 			header Cache-Control "no-store"
-			reverse_proxy go2rtc:1984
+			reverse_proxy go2rtc:1984 {
+				# Re-authorize persistent WebSocket media connections regularly.
+				# The frontend reconnects before this limit during normal viewing.
+				stream_timeout 10m
+			}
 		}
 	}
 

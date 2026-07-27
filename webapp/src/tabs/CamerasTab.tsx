@@ -88,6 +88,8 @@ export function CamerasTab({ bootstrap }: TabComponentProps): React.ReactElement
   const [downloadingId, setDownloadingId] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const archiveRequestRef = useRef(0);
+  const playbackRetryRef = useRef<Record<string, number>>({});
+  const playbackResumeRef = useRef<Record<string, number>>({});
 
   const selectedCamera =
     cameras.find((camera) => camera.id === selectedId) ?? cameras[0];
@@ -163,6 +165,8 @@ export function CamerasTab({ bootstrap }: TabComponentProps): React.ReactElement
     setExpandedVideoId(undefined);
     setVideoTickets({});
     setTicketErrors({});
+    playbackRetryRef.current = {};
+    playbackResumeRef.current = {};
     void loadVideos(undefined, false, controller.signal);
     return () => {
       controller.abort();
@@ -211,12 +215,35 @@ export function CamerasTab({ bootstrap }: TabComponentProps): React.ReactElement
     const videoId = String(video.id);
     if (expandedVideoId === videoId) {
       setExpandedVideoId(undefined);
+      delete playbackRetryRef.current[videoId];
+      delete playbackResumeRef.current[videoId];
       return;
     }
     setExpandedVideoId(videoId);
     if (!ticketIsUsable(videoTickets[videoId])) {
       void getVideoTicket(video).catch(() => undefined);
     }
+  };
+
+  const renewVideoPlayback = (
+    video: VideoRecording,
+    element: HTMLVideoElement,
+  ): void => {
+    const videoId = String(video.id);
+    const retryCount = playbackRetryRef.current[videoId] ?? 0;
+    if (retryCount >= 1) {
+      setTicketErrors((current) => ({
+        ...current,
+        [videoId]: "Не удалось продолжить воспроизведение после обновления ссылки.",
+      }));
+      return;
+    }
+
+    playbackRetryRef.current[videoId] = retryCount + 1;
+    if (Number.isFinite(element.currentTime) && element.currentTime > 0) {
+      playbackResumeRef.current[videoId] = element.currentTime;
+    }
+    void getVideoTicket(video, true).catch(() => undefined);
   };
 
   const downloadVideo = async (video: VideoRecording): Promise<void> => {
@@ -402,6 +429,19 @@ export function CamerasTab({ bootstrap }: TabComponentProps): React.ReactElement
                           <>
                             <video
                               controls
+                              onError={(event) =>
+                                renewVideoPlayback(video, event.currentTarget)
+                              }
+                              onLoadedMetadata={(event) => {
+                                const resumeAt = playbackResumeRef.current[videoId];
+                                if (resumeAt && resumeAt < event.currentTarget.duration) {
+                                  event.currentTarget.currentTime = resumeAt;
+                                }
+                              }}
+                              onPlaying={() => {
+                                playbackRetryRef.current[videoId] = 0;
+                                delete playbackResumeRef.current[videoId];
+                              }}
                               playsInline
                               preload="metadata"
                               src={ticket.content_url}

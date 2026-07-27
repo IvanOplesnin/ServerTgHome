@@ -86,6 +86,7 @@ class MiniAppInfrastructureTests(unittest.TestCase):
             self.assertIn(endpoint, caddyfile)
         self.assertIn("forward_auth api:8080", caddyfile)
         self.assertIn("method GET HEAD", caddyfile)
+        self.assertIn("stream_timeout 10m", caddyfile)
         self.assertIn("@blocked_media path /media /media/*", caddyfile)
         self.assertNotIn("handle_path /media/api", caddyfile)
         self.assertNotIn("\n\tlog {", caddyfile)
