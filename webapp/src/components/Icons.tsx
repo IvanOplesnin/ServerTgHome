@@ -73,6 +73,15 @@ export function StopIcon(props: IconProps): React.ReactElement {
   );
 }
 
+export function RecordIcon(props: IconProps): React.ReactElement {
+  return (
+    <IconBase {...props}>
+      <circle cx="12" cy="12" fill="currentColor" r="5.5" />
+      <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.5" />
+    </IconBase>
+  );
+}
+
 export function DownloadIcon(props: IconProps): React.ReactElement {
   return (
     <IconBase {...props}>

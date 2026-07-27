@@ -12,6 +12,7 @@ It runs in a LAN, receives webhooks, records camera clips, sends messages/photos
 - Keep a short rolling camera buffer so clips can include seconds before the event.
 - Record and send clips from Telegram with `/clip`.
 - Record camera video to local disk/SSD with `/record`.
+- Start an SSD recording in the Mini App and inspect active jobs with `/recordings`.
 - Show saved videos with `/videos` and send a selected file using inline buttons.
 - Capture snapshots with `/snapshot`.
 - Send the latest saved video with `/last`.
@@ -591,6 +592,7 @@ The bot registers Telegram commands, so the `/` menu shows them.
 - `/cameras`: camera and buffer status.
 - `/clip entrance 20`: record and send a 20 second clip.
 - `/record entrance 120`: record a 120 second video to disk without automatic upload.
+- `/recordings`: show running manual SSD recordings and cameras waiting in the queue.
 - `/videos entrance`: show the latest 20 saved camera videos with upload buttons.
 - `/last entrance`: send the latest saved clip.
 - `/snapshot entrance`: capture one frame.
@@ -619,7 +621,7 @@ Inside a Telegram topic mapped to a camera through `telegram.camera_topics`, `/r
 
 `/record` stores the file under `storage.path/<camera>/<date>/` and creates a row in `videos`. When the worker finishes, it sends a text notification with the video id. `/videos` lists the latest 20 existing files from the database and sends the selected video to the current chat/topic when an inline button is clicked.
 
-Admin-only actions: `/clip`, `/record`, `/videos`, `/last`, `/snapshot`, `/arm`, `/disarm`, `/mute`, `/ac_on`, `/panel`, door panel camera buttons, saved-video upload buttons and voice playback.
+Admin-only actions: `/clip`, `/record`, `/recordings`, `/videos`, `/last`, `/snapshot`, `/arm`, `/disarm`, `/mute`, `/ac_on`, `/panel`, door panel camera buttons, Mini App recording controls, saved-video upload buttons and voice playback.
 
 ## Graphs
 

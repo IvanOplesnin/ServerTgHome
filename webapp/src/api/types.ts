@@ -82,6 +82,43 @@ export interface VideosResponse {
   has_more?: boolean;
 }
 
+export type RecordingStatus = "queued" | "running";
+export type RecordingPhase = "queued" | "recording" | "finalizing" | "stale";
+
+export interface RecordingActivity {
+  job_id: string;
+  camera_id: string;
+  status: RecordingStatus;
+  phase: RecordingPhase;
+  duration_sec: number;
+  created_at: string;
+  started_at?: string | null;
+  expected_finish_at?: string | null;
+}
+
+export interface RecordingsResponse {
+  items: RecordingActivity[];
+  recent_results: RecordingResult[];
+  generated_at: string;
+}
+
+export interface RecordingResult {
+  job_id: string;
+  camera_id: string;
+  status: "done" | "failed";
+  finished_at: string;
+  video_id?: number | null;
+}
+
+export interface StartRecordingResponse {
+  job_id: string;
+  camera_id: string;
+  duration_sec: number;
+  status: "queued";
+  phase: "queued";
+  created_at: string;
+}
+
 export interface DownloadTicket {
   url?: string;
   download_url?: string;

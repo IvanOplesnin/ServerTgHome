@@ -5,7 +5,9 @@ import type {
   ClimateCurrentResponse,
   ClimateHistoryResponse,
   DownloadTicket,
+  RecordingsResponse,
   SessionResponse,
+  StartRecordingResponse,
   StreamTicket,
   VideoRecording,
   VideosResponse,
@@ -129,6 +131,23 @@ export const api = {
       limit,
     });
     return request(`/videos${query}`, { signal });
+  },
+
+  getActiveRecordings(signal?: AbortSignal): Promise<RecordingsResponse> {
+    return request("/recordings", { cache: "no-store", signal });
+  },
+
+  startRecording(
+    cameraId: string,
+    durationSec?: number,
+  ): Promise<StartRecordingResponse> {
+    return request(
+      `/cameras/${encodeURIComponent(cameraId)}/recordings`,
+      {
+        method: "POST",
+        body: durationSec === undefined ? {} : { duration_sec: durationSec },
+      },
+    );
   },
 
   videoContentUrl(videoId: VideoRecording["id"]): string {

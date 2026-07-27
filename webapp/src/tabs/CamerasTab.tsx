@@ -5,6 +5,7 @@ import type {
   Camera,
   CameraHealthDetails,
   DownloadTicket,
+  RecordingActivity,
   VideoRecording,
 } from "../api/types";
 import {
@@ -12,12 +13,20 @@ import {
   ChevronIcon,
   DownloadIcon,
   PlayIcon,
+  RecordIcon,
   RefreshIcon,
   StopIcon,
 } from "../components/Icons";
 import { EmptyState, ErrorState, SectionSkeleton } from "../components/States";
 import { formatBytes, formatDateTime, formatDuration, safeFilename } from "../lib/format";
 import { classifyVideoPlaybackFailure } from "../lib/media";
+import {
+  cameraRecording,
+  formatRecordingDuration,
+  recordingBlocksStart,
+  recordingButtonLabel,
+  recordingDescription,
+} from "../lib/recordings";
 import { Go2RtcPlayer } from "../live/Go2RtcPlayer";
 import { notify, requestTelegramDownload } from "../telegram";
 import type { TabComponentProps } from "./registryTypes";
@@ -25,6 +34,12 @@ import type { TabComponentProps } from "./registryTypes";
 interface PlaybackErrorState {
   message: string;
   retryable: boolean;
+}
+
+interface RecordingFeedback {
+  cameraId: string;
+  kind: "success" | "error";
+  message: string;
 }
 
 function cameraHealth(camera: Camera): {
@@ -79,10 +94,17 @@ function ticketIsUsable(ticket: DownloadTicket | undefined): ticket is DownloadT
 }
 
 export function CamerasTab({ bootstrap }: TabComponentProps): React.ReactElement {
+  const isAdmin = bootstrap.user.role === "admin" || bootstrap.user.is_admin === true;
   const [cameras, setCameras] = useState(bootstrap.cameras);
   const [selectedId, setSelectedId] = useState(bootstrap.cameras[0]?.id ?? "");
   const [liveCameraId, setLiveCameraId] = useState<string>();
   const [healthError, setHealthError] = useState<string>();
+  const [recordings, setRecordings] = useState<RecordingActivity[]>([]);
+  const [recordingsError, setRecordingsError] = useState<string>();
+  const [recordingStartingIds, setRecordingStartingIds] = useState<Set<string>>(
+    new Set(),
+  );
+  const [recordingFeedback, setRecordingFeedback] = useState<RecordingFeedback>();
   const [videos, setVideos] = useState<VideoRecording[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>();
   const [archiveLoading, setArchiveLoading] = useState(false);
@@ -97,6 +119,9 @@ export function CamerasTab({ bootstrap }: TabComponentProps): React.ReactElement
   const [downloadingId, setDownloadingId] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const archiveRequestRef = useRef(0);
+  const previousRecordingsRef = useRef<RecordingActivity[]>([]);
+  const recordingsRequestRef = useRef(0);
+  const recordingStartRef = useRef<Set<string>>(new Set());
   const playbackRetryRef = useRef<Record<string, number>>({});
   const playbackResumeRef = useRef<Record<string, number>>({});
 
@@ -183,6 +208,154 @@ export function CamerasTab({ bootstrap }: TabComponentProps): React.ReactElement
       archiveRequestRef.current += 1;
     };
   }, [loadVideos]);
+
+  const refreshRecordings = useCallback(
+    async (signal?: AbortSignal) => {
+      if (!isAdmin) {
+        return;
+      }
+      const requestId = ++recordingsRequestRef.current;
+      try {
+        const response = await api.getActiveRecordings(signal);
+        if (
+          signal?.aborted ||
+          requestId !== recordingsRequestRef.current
+        ) {
+          return;
+        }
+        const previous = previousRecordingsRef.current;
+        const activeIds = new Set(response.items.map((item) => item.job_id));
+        const completedForSelectedCamera = previous.filter(
+          (item) =>
+            item.camera_id === selectedCameraId && !activeIds.has(item.job_id),
+        );
+        const completedIds = new Set(
+          completedForSelectedCamera.map((item) => item.job_id),
+        );
+        const terminalResult = response.recent_results.find((result) =>
+          completedIds.has(result.job_id),
+        );
+        previousRecordingsRef.current = response.items;
+        setRecordings(response.items);
+        setRecordingsError(undefined);
+        if (completedForSelectedCamera.length > 0) {
+          void loadVideos();
+        }
+        if (terminalResult?.status === "done") {
+          setRecordingFeedback({
+            cameraId: terminalResult.camera_id,
+            kind: "success",
+            message: "Запись завершена и сохранена в архив.",
+          });
+          notify("success");
+        } else if (terminalResult?.status === "failed") {
+          setRecordingFeedback({
+            cameraId: terminalResult.camera_id,
+            kind: "error",
+            message:
+              "Не удалось записать видео. Проверьте камеру и повторите.",
+          });
+          notify("error");
+        }
+      } catch (error) {
+        if (
+          signal?.aborted ||
+          requestId !== recordingsRequestRef.current
+        ) {
+          return;
+        }
+        setRecordingsError(
+          error instanceof Error
+            ? error.message
+            : "Не удалось обновить состояние записей",
+        );
+      }
+    },
+    [isAdmin, loadVideos, selectedCameraId],
+  );
+
+  useEffect(() => {
+    if (!isAdmin) {
+      recordingsRequestRef.current += 1;
+      previousRecordingsRef.current = [];
+      setRecordings([]);
+      setRecordingsError(undefined);
+      return;
+    }
+    const controller = new AbortController();
+    void refreshRecordings(controller.signal);
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void refreshRecordings(controller.signal);
+      }
+    }, 10_000);
+    return () => {
+      recordingsRequestRef.current += 1;
+      controller.abort();
+      window.clearInterval(interval);
+    };
+  }, [isAdmin, refreshRecordings]);
+
+  const startRecording = async (): Promise<void> => {
+    if (
+      !isAdmin ||
+      !selectedCameraId ||
+      recordingStartRef.current.has(selectedCameraId)
+    ) {
+      return;
+    }
+    const cameraId = selectedCameraId;
+    const cameraTitle = selectedCamera?.title ?? cameraId;
+    recordingStartRef.current.add(cameraId);
+    setRecordingStartingIds((current) => new Set(current).add(cameraId));
+    setRecordingFeedback(undefined);
+    try {
+      const response = await api.startRecording(cameraId);
+      const optimistic: RecordingActivity = {
+        job_id: response.job_id,
+        camera_id: response.camera_id,
+        status: response.status,
+        phase: response.phase,
+        duration_sec: response.duration_sec,
+        created_at: response.created_at,
+        started_at: null,
+        expected_finish_at: null,
+      };
+      const nextRecordings = [
+        ...previousRecordingsRef.current.filter(
+          (item) => item.job_id !== optimistic.job_id,
+        ),
+        optimistic,
+      ];
+      previousRecordingsRef.current = nextRecordings;
+      setRecordings(nextRecordings);
+      setRecordingFeedback({
+        cameraId,
+        kind: "success",
+        message: `${cameraTitle}: запись поставлена в очередь на ${formatRecordingDuration(
+          response.duration_sec,
+        )}.`,
+      });
+      notify("success");
+      void refreshRecordings();
+    } catch (error) {
+      setRecordingFeedback({
+        cameraId,
+        kind: "error",
+        message: `${cameraTitle}: ${
+          error instanceof Error ? error.message : "не удалось запустить запись"
+        }`,
+      });
+      notify("error");
+    } finally {
+      recordingStartRef.current.delete(cameraId);
+      setRecordingStartingIds((current) => {
+        const next = new Set(current);
+        next.delete(cameraId);
+        return next;
+      });
+    }
+  };
 
   const startLive = (): void => {
     if (!selectedCamera) {
@@ -326,6 +499,13 @@ export function CamerasTab({ bootstrap }: TabComponentProps): React.ReactElement
   };
 
   const health = selectedCamera ? cameraHealth(selectedCamera) : undefined;
+  const selectedRecording = selectedCameraId
+    ? cameraRecording(recordings, selectedCameraId)
+    : undefined;
+  const recordingStarting = selectedCameraId
+    ? recordingStartingIds.has(selectedCameraId)
+    : false;
+  const selectedRecordingDescription = recordingDescription(selectedRecording);
   const hasMore = Boolean(nextCursor);
 
   if (!selectedCamera) {
@@ -357,6 +537,7 @@ export function CamerasTab({ bootstrap }: TabComponentProps): React.ReactElement
               onClick={() => {
                 setSelectedId(camera.id);
                 stopLive();
+                setRecordingFeedback(undefined);
               }}
               role="listitem"
               type="button"
@@ -381,16 +562,61 @@ export function CamerasTab({ bootstrap }: TabComponentProps): React.ReactElement
           <h2>{selectedCamera.title}</h2>
           <p>{health?.reason ?? "Прямая трансляция и сохранённые записи"}</p>
         </div>
-        <button
-          className={`live-button ${liveCameraId === selectedCamera.id ? "live-button--stop" : ""}`}
-          disabled={selectedCamera.live_available === false}
-          onClick={liveCameraId === selectedCamera.id ? stopLive : startLive}
-          type="button"
-        >
-          {liveCameraId === selectedCamera.id ? <StopIcon /> : <PlayIcon />}
-          {liveCameraId === selectedCamera.id ? "Остановить" : "Смотреть"}
-        </button>
+        <div className="camera-actions">
+          <button
+            className={`live-button ${liveCameraId === selectedCamera.id ? "live-button--stop" : ""}`}
+            disabled={selectedCamera.live_available === false}
+            onClick={liveCameraId === selectedCamera.id ? stopLive : startLive}
+            type="button"
+          >
+            {liveCameraId === selectedCamera.id ? <StopIcon /> : <PlayIcon />}
+            {liveCameraId === selectedCamera.id ? "Остановить" : "Смотреть"}
+          </button>
+          {isAdmin && (
+            <button
+              className={`record-button ${
+                selectedRecording ? "record-button--active" : ""
+              }`}
+              aria-busy={recordingStarting}
+              aria-label={`${recordingButtonLabel(
+                selectedRecording,
+                recordingStarting,
+              )}: ${selectedCamera.title}`}
+              disabled={
+                recordingStarting || recordingBlocksStart(selectedRecording)
+              }
+              onClick={() => void startRecording()}
+              type="button"
+            >
+              <RecordIcon />
+              {recordingButtonLabel(selectedRecording, recordingStarting)}
+            </button>
+          )}
+        </div>
+        {isAdmin && selectedRecordingDescription && (
+          <p className="recording-state">
+            {selectedRecordingDescription}
+          </p>
+        )}
       </section>
+
+      {recordingFeedback?.cameraId === selectedCameraId && (
+        <p
+          className={recordingFeedback.kind === "error" ? "inline-error" : "notice"}
+          role={recordingFeedback.kind === "error" ? "alert" : "status"}
+        >
+          {recordingFeedback.message}
+        </p>
+      )}
+
+      {isAdmin && recordingsError && (
+        <div className="inline-warning">
+          <span>{recordingsError}</span>
+          <button onClick={() => void refreshRecordings()} type="button">
+            Обновить
+          </button>
+        </div>
+      )}
 
       {healthError && (
         <div className="inline-warning">
