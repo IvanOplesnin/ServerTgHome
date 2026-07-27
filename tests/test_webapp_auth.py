@@ -281,3 +281,39 @@ class AuthServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(await auth.authenticate(created.token))
         self.assertIsNone(await store.get(created.token))
+
+    async def test_viewer_membership_is_rechecked_and_session_is_revoked(self) -> None:
+        current_time = [NOW]
+        membership_result = [True]
+        membership_calls: list[tuple[int, int]] = []
+        redis = FakeRedis()
+        store = RedisSessionStore(
+            redis,
+            3600,
+            clock=lambda: current_time[0],
+        )
+
+        async def membership(chat_id: int, user_id: int) -> bool:
+            membership_calls.append((chat_id, user_id))
+            return membership_result[0]
+
+        auth = MiniAppAuthService(
+            _settings(viewers=[42]),
+            store,
+            membership,
+            clock=lambda: current_time[0],
+        )
+        created = await auth.login(_signed_init_data())
+
+        self.assertIsNotNone(await auth.authenticate(created.token))
+        self.assertEqual(membership_calls, [(-100123, 42)])
+
+        membership_result[0] = False
+        current_time[0] += 301
+
+        self.assertIsNone(await auth.authenticate(created.token))
+        self.assertEqual(
+            membership_calls,
+            [(-100123, 42), (-100123, 42)],
+        )
+        self.assertIsNone(await store.get(created.token))

@@ -215,6 +215,7 @@ class MiniAppAuthService:
         self._session_store = session_store
         self._membership_checker = membership_checker
         self._clock = clock or _unix_time
+        self._membership_cache: dict[int, tuple[int, bool]] = {}
 
     async def login(self, init_data: str) -> CreatedSession:
         if not self._settings.webapp.enabled:
@@ -230,6 +231,14 @@ class MiniAppAuthService:
             validated.user,
             self._membership_checker,
         )
+        if (
+            principal.role == "viewer"
+            and self._settings.webapp.require_group_membership
+        ):
+            self._membership_cache[principal.user_id] = (
+                self._clock(),
+                True,
+            )
         return await self._session_store.create(principal)
 
     async def authenticate(self, token: str | None) -> SessionRecord | None:
@@ -247,7 +256,41 @@ class MiniAppAuthService:
         if session.user_id not in current_ids:
             await self._session_store.delete(token)
             return None
+        if not await self.user_is_active(session.user_id):
+            await self._session_store.delete(token)
+            return None
         return session
 
     async def logout(self, token: str | None) -> None:
         await self._session_store.delete(token)
+
+    async def user_is_active(self, user_id: int) -> bool:
+        if user_id in self._settings.telegram.admin_user_ids:
+            return True
+        if user_id not in self._settings.webapp.viewer_user_ids:
+            return False
+        if not self._settings.webapp.require_group_membership:
+            return True
+
+        checked_at, cached_result = self._membership_cache.get(
+            user_id,
+            (0, False),
+        )
+        if (
+            checked_at > 0
+            and self._clock() - checked_at
+            < self._settings.webapp.membership_recheck_sec
+        ):
+            return cached_result
+
+        chat_id = self._settings.webapp.primary_chat_id
+        if chat_id is None or self._membership_checker is None:
+            is_member = False
+        else:
+            try:
+                is_member = await self._membership_checker(chat_id, user_id)
+            except Exception:
+                logger.warning("Telegram group membership recheck failed")
+                is_member = False
+        self._membership_cache[user_id] = (self._clock(), is_member)
+        return is_member

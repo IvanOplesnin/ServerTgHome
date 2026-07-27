@@ -267,7 +267,10 @@ def create_webapp_control_router() -> APIRouter:
             match.group("token"),
             purpose="stream",
         )
-        if ticket is None or not _ticket_user_allowed(settings, ticket.user_id):
+        if (
+            ticket is None
+            or not await _auth_service(request).user_is_active(ticket.user_id)
+        ):
             raise _media_denied()
 
         camera = settings.cameras.get(ticket.resource_id)
@@ -353,7 +356,7 @@ async def _ticket_video_artifact(
     ticket = await _ticket_store(request).get(token, purpose="download")
     if (
         ticket is None
-        or not _ticket_user_allowed(settings, ticket.user_id)
+        or not await _auth_service(request).user_is_active(ticket.user_id)
         or not ticket.resource_id.isdecimal()
     ):
         raise _ticket_not_found()
@@ -404,13 +407,6 @@ def _video_response(
         stat_result=artifact.stat_result,
         content_disposition_type=disposition,
         headers={"Cache-Control": "private, no-store"},
-    )
-
-
-def _ticket_user_allowed(settings: Settings, user_id: int) -> bool:
-    return (
-        user_id in settings.telegram.admin_user_ids
-        or user_id in settings.webapp.viewer_user_ids
     )
 
 

@@ -14,6 +14,7 @@ class WebAppConfigTests(unittest.TestCase):
         self.assertFalse(settings.webapp.enabled)
         self.assertEqual(settings.webapp.viewer_user_ids, [])
         self.assertTrue(settings.webapp.require_group_membership)
+        self.assertEqual(settings.webapp.membership_recheck_sec, 300)
         self.assertEqual([tab.id for tab in settings.webapp.tabs], ["cameras", "climate"])
 
     def test_legacy_allowed_user_ids_alias_is_accepted(self) -> None:

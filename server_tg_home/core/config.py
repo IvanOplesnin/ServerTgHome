@@ -90,6 +90,7 @@ class WebAppConfig(BaseModel):
         validation_alias=AliasChoices("viewer_user_ids", "allowed_user_ids"),
     )
     require_group_membership: bool = True
+    membership_recheck_sec: int = Field(default=300, ge=30, le=3600)
     auth_max_age_sec: int = Field(default=300, ge=30, le=86_400)
     session_ttl_sec: int = Field(default=3600, ge=60, le=2_592_000)
     media_ticket_ttl_sec: int = Field(default=3600, ge=60, le=3600)
