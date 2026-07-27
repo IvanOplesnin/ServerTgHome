@@ -112,6 +112,32 @@ webrtc:
 `config/config.yaml` и `config/go2rtc.yaml`; `go2rtc_stream` должен совпадать с
 именем соответствующего stream.
 
+Если основной поток камеры использует HEVC/H.265 или разрешение выше 1080p,
+добавьте отдельный H.264-вариант для Mini App. go2rtc запускает его по
+требованию, только пока открыт просмотр:
+
+```yaml
+# config/go2rtc.yaml
+streams:
+  entrance:
+    - rtsp://CAMERA_ACCOUNT:CAMERA_PASSWORD@CAMERA_LAN_IP:554/stream1
+  entrance_web:
+    - "ffmpeg:entrance#video=h264#width=1920#height=-2#audio=aac"
+```
+
+```yaml
+# config/config.yaml
+cameras:
+  entrance:
+    go2rtc_stream: "entrance_web"
+```
+
+Финальные MP4 для архива должны быть не больше 1920×1080 и использовать H.264
+High Level 4.1 с частотой не выше 30 кадров/с, `yuv420p`, AAC 48 kHz и
+`+faststart`. Эти параметры задаются через `ffmpeg_clip_output_args`;
+постоянный pre-event buffer по-прежнему может копировать исходный поток без
+круглосуточного транскодирования.
+
 На mini PC используется отдельный runtime `compose.yaml`. В него нужно перенести
 из репозиторного `docker-compose.yml`:
 
@@ -151,6 +177,35 @@ docker compose --profile miniapp config --quiet
 docker compose --profile miniapp up -d --build --force-recreate \
   miniapp-web api go2rtc buffer
 ```
+
+## Миграция старых записей
+
+Изменение `ffmpeg_clip_output_args` влияет только на новые файлы. Старые MP4 с
+высоким H.264 Level, разрешением выше 1080p или аудио 8 kHz можно безопасно
+привести к совместимому формату встроенной утилитой. Сначала остановите
+retention и выполните dry-run:
+
+```bash
+docker compose stop retention
+docker compose run --rm --no-deps worker \
+  python -m server_tg_home.tools.recording_compat \
+  --camera entrance \
+  --backup-dir /data/migration-backups/entrance-webcompat-YYYYMMDDTHHMMSSZ \
+  --dry-run
+```
+
+Если dry-run не показывает ошибок, повторите ту же команду с `--apply`.
+Утилита проверяет, что каждый файл находится внутри `storage.path`, создаёт
+hardlink оригинала на том же диске, кодирует во временный файл, валидирует
+codec, размеры, FPS, аудио, длительность и `faststart`, затем атомарно заменяет
+оригинал и обновляет `videos.size_bytes`. Повторный запуск безопасен: уже
+совместимые записи пропускаются. После проверки результата верните retention:
+
+```bash
+docker compose up -d retention
+```
+
+Каталог backup не удаляйте до ручной проверки воспроизведения в Telegram.
 
 ## Маршруты для существующего Caddy
 
@@ -294,9 +349,10 @@ curl -I https://miniapp.example.com/
 Если mini PC соединяется с Telegram напрямую, оставьте proxy пустым. Он не
 публикует Mini App и не заменяет Caddy, DNS или port forwarding.
 
-Обычный HTTP/SOCKS proxy также не передает WebRTC. Если прямой WebRTC на `8555`
-недоступен, плеер пробует MSE/HLS через HTTPS `443`; TURN можно добавить позже
-как отдельный media transport.
+Обычный HTTP/SOCKS proxy также не передает WebRTC. Для прямого WebRTC на
+роутере обязательны два отдельных правила: `8555/tcp` и `8555/udp` на mini PC.
+Если этот порт недоступен, плеер пробует MSE/HLS через HTTPS `443`; TURN можно
+добавить позже как отдельный media transport.
 
 ## Диагностика
 
@@ -307,6 +363,13 @@ curl -I https://miniapp.example.com/
   интерфейсу либо заблокирован firewall.
 - WebSocket получает `401/404`: проверить ticket и соответствие
   `go2rtc_stream`.
+- Архив скачивается, но не проигрывается: проверить `ffprobe` — MP4 должен
+  содержать H.264 не выше Level 4.1, `yuv420p`, разрешение не выше 1080p и AAC
+  с частотой 44.1/48 kHz, а FPS не должен превышать 30. Старые несовместимые
+  файлы нужно один раз перекодировать с резервной копией.
+- Live открывается без изображения: проверить codec выбранного
+  `go2rtc_stream`; HEVC/H.265 или поток выше 1080p следует отдавать через
+  отдельный H.264 stream.
 - WebRTC не соединяется: проверить оба протокола `8555`, public candidate и
   перенаправление порта на mini PC.
 - Никогда не открывать `18082`, `28080` или `21984` в интернет.
